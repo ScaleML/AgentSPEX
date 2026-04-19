@@ -1,0 +1,1575 @@
+name: "ai_scientists_writer"
+goal: "Generate a scientific proposal paper from research idea and experiment plan in a cost-efficient manner"
+
+# Writer submodule config
+config:
+    model: "gpt-5-nano"
+    max_tokens_per_step: 150000
+    max_tool_calls_per_step: 30
+    plan_revision_max_steps: 0
+
+parameters:
+    idea_file: "${IDEA_FILE:-${AGENTSPEX_RUN_SANDBOX_DIR_ABS}/thinker/step-2-final-ideas.json}"
+    # Defaults to the per-run sandbox dir; parent workflows override via env.
+    output_dir: "${OUTPUT_DIR:-${AGENTSPEX_RUN_SANDBOX_DIR_ABS}/writer}"
+    paper_format: "${PAPER_FORMAT:-latex}"
+    include_preliminary_results: "${INCLUDE_PRELIMINARY_RESULTS:-false}"
+    memory_file: "${MEMORY_FILE:-${AGENTSPEX_RUN_SANDBOX_DIR_ABS}/writer/memory.json}"
+    max_citation_workers: "${MAX_CITATION_WORKERS:-2}"
+    latex_main_template: |
+        \documentclass{article}
+
+        \usepackage{PRIMEarxiv}
+
+        \usepackage{algorithm}
+
+        \usepackage{algorithmic}
+
+        \usepackage{amsmath}
+
+        \usepackage{natbib}
+
+        \usepackage[utf8]{inputenc} % allow utf-8 input
+
+        \usepackage[T1]{fontenc}    % use 8-bit T1 fonts
+
+        \usepackage{hyperref}       % hyperlinks
+
+        \usepackage{url}            % simple URL typesetting
+
+        \usepackage{booktabs}       % professional-quality tables
+
+        \usepackage{amsfonts}       % blackboard math symbols
+
+        \usepackage{nicefrac}       % compact symbols for 1/2, etc.
+
+        \usepackage{microtype}      % microtypography
+
+        \usepackage{lipsum}
+
+        \usepackage{fancyhdr}       % header
+
+        \usepackage{graphicx}       % graphics
+
+        \graphicspath{{media/}}     % organize your images and other figures under media/ folder
+
+        %Header
+
+        \pagestyle{fancy}
+
+        \thispagestyle{empty}
+
+        \rhead{ \textit{ }} 
+
+        % Update your Headers here
+
+        \fancyhead[LO]{TITLE_PLACEHOLDER}
+
+        % \fancyhead[RE]{Firstauthor and Secondauthor} % Firstauthor et al. if more than 2 - must use \documentclass[twoside]{article}
+
+        %% Title
+
+        \title{TITLE_PLACEHOLDER}
+
+        \author{
+          OptimalScale AIScientist
+        }
+
+        \begin{document}
+
+        \maketitle
+
+        \input{sections/abstract}
+
+        \input{sections/introduction}
+
+        \input{sections/related_work}
+
+        \input{sections/method}
+
+        \input{sections/experimental_setup}
+
+        %Bibliography
+
+        \bibliographystyle{unsrt}  
+
+        \bibliography{sections/references}  
+
+        \end{document}
+    citation_system_prompt: |
+        Your current task is helping add and embed citation coverage in a research paper.
+
+        Your role:
+        - When asked to suggest citations, return only real, published academic paper titles that are highly relevant to the given content.
+        - When asked to embed citations, you will be provided with papers in the format: [CITE_KEY: bibtex_key] Paper Title (authors, venue, year)
+        - You MUST extract and use the EXACT bibtex_key from [CITE_KEY: bibtex_key] when inserting `\cite{bibtex_key}` commands.
+        - For example, if you see [CITE_KEY: smith2023nlp] Natural Language Processing..., you must write \cite{smith2023nlp}
+        - NEVER invent citation keys - only use the keys explicitly provided in [CITE_KEY: ...]
+
+        **CRITICAL - MEANINGFUL CITATION PLACEMENT**:
+        - Each citation MUST support a specific claim, method, finding, or statement in that sentence
+        - Citations should be placed immediately after the claim they support
+        - Do NOT randomly insert citations without clear relevance to the sentence content
+        - If a paper is not directly relevant to a specific claim, do NOT force it into that sentence
+        - Each citation should have a clear purpose: supporting a claim, referencing a method, citing prior work, etc.
+
+        Do not invent or fabricate any citations.
+        Do not output BibTeX, author names, or publication details.
+
+        **CRITICAL - LaTeX Format Only (NO Markdown)**:
+        - Use \textbf{text} for bold, NOT **text**
+        - Use \textit{text} for italic, NOT *text*
+        - Use \texttt{text} for code/monospace, NOT `text`
+        Be thorough - missing citations is not acceptable
+        Always follow the expected output format (JSON array or updated LaTeX content), with no extra commentary or explanation.
+    write_system_prompt: |
+        Your current task to write a proposal aiming to publish a paper that will contribute significantly to the field.
+        You have already figured out the research idea and the experiments you want to run.
+
+        **IMPORTANT - Citation Principles**:
+        - Each citation must support a specific claim, statement, or finding in that sentence
+        - Citations should be placed right after the claim they support
+        - Do NOT add citations randomly or at the end of unrelated sentences
+        - Only cite papers that are directly relevant to the specific content of that sentence
+        - Use \cite{} or \citet{} to reference papers in references.bib
+
+        **CRITICAL - LaTeX Format Only (NO Markdown)**
+        - NEVER mix Markdown and LaTeX syntax (e.g., **text\textbf{ is WRONG)
+        - Use \textbf{text} for bold, NEVER **text**
+        - Use \textit{text} for italic, NEVER *text*
+        - Use \texttt{text} for code/monospace, NEVER `text`
+        - Example: \textbf{Data Collection}: not **Data Collection**: or **Data Collection\textbf{
+        - When including tables, always use proper LaTeX tabular format (not Markdown)
+        - Avoid using Markdown-style tables (e.g., those starting with `| Column |`) — they are not compatible with LaTeX rendering and will break the document
+        - For algorithms, use \begin{algorithmic}...\end{algorithmic} with \STATE, \FOR{...}, \IF{...}, \WHILE{...}, \ENDFOR, \ENDIF, \ENDWHILE (uppercase commands)
+
+        [LaTeX Formatting Reminder]
+        - **CRITICAL**: Always use `\%` for percentage values (e.g., 93\%), NEVER use bare `%` as it becomes a comment in LaTeX
+        - For actual LaTeX comments, use `% comment` (without backslash)
+        - Wrap math expressions with `$...$`
+        - Escape special characters by prefixing them with a backslash, `_` as `\_`, `&` as `\&`, `#` as `\#`, etc.
+        - For algorithms, use uppercase commands like:
+            \begin{algorithm}
+            \caption{Algorithm Name}
+            \begin{algorithmic}
+            \STATE Initialize parameters $\theta$
+            \FOR{each iteration $t = 1$ to $T$}
+                \STATE Update $\theta$ using gradient
+            \ENDFOR
+            \end{algorithmic}
+            \end{algorithm}
+
+        [Equation Length Guidelines - CRITICAL]
+        - **NEVER write equations that exceed one line width**
+        - For long equations, use multi-line environments:
+            * \begin{align}...\end{align} for multiple aligned equations
+            * \begin{multline}...\end{multline} for single equation split across lines
+            * \begin{split}...\end{split} inside equation environment
+        - Break equations at operators (+, -, =, \cdot, etc.)
+        - Use concise notation: prefer $h_t$ over $h_{timestep}$
+        - Example of proper line breaking:
+            \begin{align}
+            \mathcal{L} &= \sum_{i=1}^N \left( f(x_i; \theta) - y_i \right)^2 \\
+                        &\quad + \lambda \|\theta\|_2^2
+            \end{align}
+    write_system_prompt_related_work: |
+        Your current task is looking to publish a paper that will contribute significantly to the field.
+        You have already figured out the research idea and the experiments you want to run.
+    related_work_tips: |
+        - Academic siblings of our work, i.e. alternative attempts in literature at trying to solve the same problem.
+        - Goal is to "Compare and contrast" - how does their approach differ in either assumptions or method? If their method is applicable to our Problem Setting I expect a comparison in the experimental section. If not, there needs to be a clear statement why a given method is not applicable.
+        - Note: Just describing what another paper is doing is not enough. We need to compare and contrast.
+        - **STRUCTURE REQUIREMENT**: Write **3 paragraphs** (at most 4 paragraphs). Each paragraph should focus on a distinct category or theme of related work.
+    introduction_tips: |
+        - Write 5 paragraphs for the instructions. Each paragraph should answer one question.
+        - paragraph1: What is the problem?
+            * Start broad with background and context
+            * Narrow down to the specific gap or unsolved issue
+            * End with a sharp statement of the problem
+            * probably end the paragraph with a question like: Can LLM simulate social interactions?
+
+        - paragraph2: Why is it interesting and important?
+            * Connect to research community demand
+            * Tie to trends or consensus in the field
+            * Show broader impact or urgency
+
+        - paragraph3: Why is it hard? (E.g., why do naive approaches fail?)
+            * Explain inherent difficulty of the problem
+            * Give examples of why naive approaches fail
+            * Clarify how these challenges block real progress
+
+        - paragraph4: Why hasn't it been solved before?
+            (Or, what's wrong with previous proposed solutions? How does mine differ?)
+            * Acknowledge prior work and attempts
+            * Point out their shortcomings or gaps
+            * Clearly state how your approach differs and improves
+
+        - paragrap5: What are the key components of my approach and results?
+            * Introduce your core approach in one sentence
+            * Break into 2–3 main components
+            * Summarize key results
+    abstract_tips: |
+        - TL;DR of the paper
+        - What are we trying to do and why is it relevant?
+        - Why is this hard?
+        - How do we solve it (i.e. our contribution!)
+        - How do we verify that we solved it (e.g. Experiments and results)
+
+        Please make sure the abstract reads smoothly and is well-motivated. This should be one continuous paragraph with no breaks between the lines. Should not be too long, try to grab its important points. Each point should only have one or two sentences.
+    method_tips: |
+        - Start with Problem Definition (First Paragraph)
+          Clearly define the task my method aims to solve using precise mathematical notation.
+          Specify the input space, output space, and the target mapping/function.
+          Introduce any necessary notations, symbols, or assumptions upfront.
+          Keep it focused on the problem formulation, not experiments.
+
+        - Use Math to Describe the Algorithm / Model
+          Describe the entire method in a conceptual and mathematical way.
+          Define each core component of the method formally (e.g., functions, modules, transformations).
+          Use equations to explain how the method processes input and produces output step by step.
+          Keep the description general — no datasets, hyperparameters, or training tricks.
+
+        - Explain the Motivation for Each Design Choice
+          Before describing each component, give a brief, high-level motivation for why it is designed this way (e.g., address a limitation, exploit a property).
+          Do not dump design details without explaining their purpose first.
+
+        - Focus on the Core Algorithm / Architecture / Key Innovations
+          Highlight what is new in the method compared to existing approaches.
+          Structure the section around the main pipeline of the algorithm, not around implementation details.
+          If appropriate, include pseudo-code or algorithm boxes, but only if they clarify the method.
+
+        - Avoid Experimental Details
+          Do NOT include anything about dataset splits, training hyperparameters, model sizes, implementation tricks, or computational setup.
+          Those belong in the Experimental Setup section.
+
+        - End with a High-Level Summary (Optional)
+          Optionally, conclude with a short paragraph summarizing the overall workflow and emphasizing why the method is well-suited for the problem.
+    experimental_setup_tips: |
+        - How do we test that our stuff works? Introduces a specific instantiation of the Problem Setting and specific implementation details of our Method for this Problem Setting.
+        - Do not imagine unknown hardware details.
+        - Includes a description of the dataset, evaluation metrics, important hyperparameters, and implementation details.
+        - For a proposal, focus on the experimental setup and plan, not results.
+
+workflow:
+    - set_variable:
+        name: "all_citation"
+        value: "[]"
+
+    # Step 1: Setup - Create output directory structure
+    - task:
+        name: "setup_environment"
+        instruction: |
+            Use fs_mkdir tool to create the following directory structure:
+            - {{output_dir}}/sections
+            - {{output_dir}}/figures (for future use)
+
+            Return confirmation that all directories have been created.
+        save_as: "setup_result"
+
+    # Step 2: Load Idea (as text, no JSON parsing required)
+    - task:
+        name: "load_idea"
+        instruction: |
+            **CRITICAL - SINGLE TOOL CALL ONLY**:
+            You MUST call fs_read tool ONCE and then immediately return the content.
+            DO NOT call fs_read multiple times.
+            DO NOT re-read the file after receiving the content.
+
+            Use fs_read tool to read the idea file at {{idea_file}}.
+
+            **CRITICAL**: Do NOT use max_bytes=0. Use max_bytes=10485760 or omit the parameter.
+
+            **SIMPLE TASK - READ AS TEXT**:
+            After reading the file, simply return the entire file content as text.
+            DO NOT parse, extract, or reformat the content.
+            DO NOT validate JSON format.
+            Just return the complete text content that was read from the file.
+
+            **EXECUTION STEPS** (execute in order, stop after step 2):
+            1. Call fs_read tool with path: {{idea_file}}
+            2. Once you receive the file content in the tool response, immediately return that content as your final answer
+            3. DO NOT call any other tools after receiving the file content
+            4. DO NOT call fs_read again - you already have the content
+
+            **IMPORTANT**: The tool response will contain the file content in the "text" field. Extract that text and return it directly.
+
+        save_as: "idea_data"
+
+
+    # Step 2.1: Create main.tex with Title from idea_data (using LLM for string replacement)
+    # This step uses LLM to perform the string replacement to avoid eval() issues with multi-line strings
+    - task:
+        name: "create_main_tex_content"
+        instruction: |
+            **CRITICAL - STRING REPLACEMENT TASK ONLY**:
+            You must perform a simple string replacement: replace `TITLE_PLACEHOLDER` with the actual title.
+            
+            **INPUTS PROVIDED**:
+            - LaTeX Template (contains `TITLE_PLACEHOLDER` in two places): {{latex_main_template}}
+            
+            - Research Idea: {{idea_data}}
+
+            **TITLE EXTRACTION RULE (IMPORTANT)**:
+            - Extract the paper title from the Research Idea shown above (look for the `Title` field / JSON key `"Title"`).
+            - The actual title to insert is the extracted Title VALUE (plain text), NOT the literal string `idea_data`.
+            
+            **YOUR TASK**:
+            1. Take the LaTeX template above
+            2. Find ALL occurrences of the exact string `TITLE_PLACEHOLDER`
+            3. Replace each `TITLE_PLACEHOLDER` with the extracted title text
+            4. Return ONLY the complete modified LaTeX template (with Title inserted)
+            
+            
+            **CRITICAL - OUTPUT REQUIREMENTS**:
+            - Return ONLY the complete LaTeX template text
+            - DO NOT include any explanations, comments, or additional text
+            - DO NOT use any tools (fs_write, fs_read, fs_mkdir, etc.)
+            - DO NOT modify any part of the template except replacing `TITLE_PLACEHOLDER`
+            - DO NOT add or remove any lines
+            - The output should be the exact same template, but with `TITLE_PLACEHOLDER` replaced by the title
+            
+            **EXAMPLE**:
+            If the template contains:
+            ```
+            \fancyhead[LO]{TITLE_PLACEHOLDER}
+            \title{TITLE_PLACEHOLDER}
+            ```
+            
+            And the title is "My Research Title", then return:
+            ```
+            \fancyhead[LO]{My Research Title}
+            \title{My Research Title}
+            ```
+            
+            **NOW PERFORM THE REPLACEMENT AND RETURN THE COMPLETE TEMPLATE**:
+        save_as: "main_tex_content"
+    
+    # Step 2.2: Save main.tex file
+    - task:
+        name: "save_main_tex"
+        instruction: |
+            **CRITICAL - ONLY ONE OPERATION ALLOWED**:
+            Use fs_write to save the main.tex content that was prepared in the previous step.
+            
+            **ALL OTHER OPERATIONS ARE FORBIDDEN**:
+            - DO NOT modify the content
+            - DO NOT use any other tools (fs_read, fs_mkdir, etc.)
+            - DO NOT ask for confirmation
+            - DO NOT provide explanations or suggestions
+            
+            **CONTENT TO SAVE**:
+            The main.tex content has already been prepared in the previous step and is stored in context variable 'main_tex_content'.
+            
+            **CRITICAL - CONTENT BOUNDARIES**:
+            The content to save is the VALUE of the context variable 'main_tex_content'.
+            This variable contains the COMPLETE LaTeX template with Title already inserted.
+            
+            ========== CONTENT TO SAVE (START) ==========
+            {{main_tex_content}}
+            ========== CONTENT TO SAVE (END) ==========
+            
+            **EXECUTION STEPS** (execute immediately, no questions):
+            1. Extract the content between "CONTENT TO SAVE (START)" and "CONTENT TO SAVE (END)" markers above.
+            2. This content is the VALUE of 'main_tex_content' variable (the LaTeX template with Title).
+            3. Call fs_write tool with:
+               - path: {{output_dir}}/sections/main.tex
+               - content: (ONLY the content between the markers, nothing else)
+               - mode: "text"
+            4. Return ONLY: "File saved: {{output_dir}}/sections/main.tex"
+            
+            **CRITICAL - DO NOT MODIFY CONTENT**:
+            - DO NOT change anything
+            - DO NOT modify any part of the LaTeX template
+            - DO NOT add or remove any characters
+            - Save the content EXACTLY as shown between the markers
+            
+            **DO NOT**:
+            - Save instruction text, markers, or any explanation
+            - Use any other tools
+            - Ask questions or provide explanations
+        save_as: "save_main_tex_result"
+
+    # Step 3: Create initial citation query for related work
+    - task:
+        name: "create_init_citation_query_for_related_work"
+        instruction: |
+            {{citation_system_prompt}}
+
+            You will generate search queries to find relevant papers for citation in the Related Work section.
+
+            **CONTEXT**:
+            - Idea: {{idea_data}}
+                Focus on fields: Title, Problem, Importance, Difficulty, NoveltyComparison, Approach, Experiment etc.
+
+            - Section Content:
+                None
+
+            **YOUR TASK**: Read the IDEA and SECTION CONTENT above and extract 2-3 SPECIFIC technical terms FROM THEM to create 3 search queries.
+
+            **CRITICAL STEP-BY-STEP**:
+            1. READ the idea and the section snippet carefully
+            2. IDENTIFY specific techniques/algorithms/models (e.g., "graph attention network", "knowledge distillation", "BERT")
+            3. IDENTIFY the task/application when present (e.g., "link prediction", "question answering")
+            4. CREATE queries as: "specific_technique AND specific_task" (if task is present), otherwise combine 2-3 specific techniques
+            5. DO NOT use generic terms; use only concrete technical terminology
+
+            **TYPES OF SPECIFIC TERMS TO EXTRACT**:
+            ✅ Specific models: "BERT", "GPT-4", "T5", "ResNet"
+            ✅ Specific architectures: "graph attention network", "encoder-decoder"
+            ✅ Specific techniques: "knowledge distillation", "contrastive learning", "adversarial training"
+            ✅ Specific mechanisms: "multi-head attention", "cross-attention", "tree-based reasoning"
+            ✅ Specific tasks: "question answering", "sentiment analysis", "link prediction"
+            ✅ Specific datasets/benchmarks: "SQuAD", "GLUE", "ImageNet"
+
+            **WHAT TO AVOID**:
+            ❌ "deep learning", "machine learning", "AI"
+            ❌ "neural networks" (specify which type)
+            ❌ Domain-only terms: "NLP", "CV"
+            ❌ Vague phrases: "improve performance", "state-of-the-art"
+
+            **FORMAT EXAMPLES** (structure only):
+            - If idea/snippet mentions "BERT for question answering" → "BERT AND question answering"
+            - If mentions "graph attention on citation networks" → "graph attention network AND citation network"
+            - If discusses "knowledge distillation for language models" → "knowledge distillation AND language model"
+
+            **OUTPUT FORMAT**:
+            Return ONLY a JSON array of 3 query strings with no extra commentary.
+
+            Example:
+            [
+                "graph attention network AND link prediction",
+                "knowledge distillation AND language model",
+                "multi-head attention AND machine translation",
+                ...
+            ]
+        save_as: "initial_citation_query_for_related_work"
+
+    # Step 4: Prepare parallel params for related work citation search
+    - task:
+        name: "prepare_citation_search_params_for_related_work"
+        instruction: |
+            From the citation queries: {{initial_citation_query_for_related_work}}
+
+            Create a parameter list for parallel citation search module calls.
+
+            For each query in the list:
+            Create a parameter dictionary:
+            {
+                "query": "the search query",
+                "max_papers": 1
+            }
+
+            Combine all into a single list:
+            [
+                {"query": "query1", "max_papers": 1},
+                {"query": "query2", "max_papers": 1},
+                ...
+            ]
+
+            Return ONLY the JSON array with no extra commentary.
+        save_as: "citation_search_params_related_work"
+
+    # Step 5: Parallel Citation Search for Related Work
+    - parallel:
+        module: "./modules/search_citations.yaml"
+        parameters_list: "citation_search_params_related_work"
+        save_results_as: "related_work_citations_raw"
+        max_workers: "max_citation_workers"
+
+    # Step 6: Process the searched citations into a list
+    - set_variable:
+        name: "related_work_citations"
+        value: "sum (list( {{related_work_citations_raw}}.values() ), [] )"
+    
+    # Step 6.5: Normalize bibtex keys to LastName_Year format
+    - task:
+        name: "normalize_related_work_citation_keys"
+        instruction: |
+            **CRITICAL TASK**: Normalize bibtex keys to LastName_Year format. Process the citations list below and return a complete Python list.
+            
+            **NO TOOLS ALLOWED** - Return ONLY the modified list, no file operations.
+            
+            Citations list:
+            {{related_work_citations}}
+            
+            **REQUIREMENTS**:
+            1. For each citation, extract the bibtex key (after @type{ and before first comma)
+            2. If key is NOT LastName_Year format (e.g., URL):
+               - Extract FIRST author's LAST NAME from bibtex 'author' field
+               - Extract 'year' from bibtex
+               - Generate key: LastName_Year (e.g., "Alakhdar_2025")
+               - If missing author/year: use "AuthorX_YYYY" format (unique)
+               - If conflict: append letter (e.g., "Alakhdar_2025a")
+               - Replace ONLY the key in bibtex string, keep everything else EXACTLY the same
+            3. **CRITICAL**: Preserve EVERYTHING except the key:
+               - Keep all other bibtex content (spaces, commas, formatting) EXACTLY the same
+               - Keep file_path, title, abstract fields EXACTLY the same
+               - Keep dictionary structure EXACTLY the same
+            
+            **OUTPUT**:
+            - Return a complete Python list: `[{...}, {...}, ...]`
+            - MUST start with `[` and end with `]`
+            - MUST include ALL citations with ALL fields: bibtex, file_path, title, abstract
+            - Return ONLY the list, no explanations
+        save_as: "related_work_citations"
+    
+    # Step 6.6: Log normalization done
+    - task:
+        name: "normalize_related_work_citation_keys_done"
+        instruction: |
+            **CRITICAL - NO FILE OPERATIONS ALLOWED**:
+            This is a logging step only. You MUST NOT use fs_write, fs_read, fs_mkdir, or any other file operations.
+            
+            **REQUIRED ACTION**:
+            Simply return a brief confirmation message: "Related work citation keys normalization is done."
+            
+            **FORBIDDEN ACTIONS**:
+            - DO NOT use fs_write to save any files
+            - DO NOT use fs_read to read any files
+            - DO NOT use fs_mkdir to create directories
+            - DO NOT provide detailed status reports or file listings
+            - DO NOT save intermediate results or summaries
+            
+            Return ONLY the confirmation message.
+        save_as: "normalize_related_work_citation_keys_result"
+    
+    # Step 7: Save into global citations for future use
+    - set_variable:
+        name: "all_citation"
+        value: "{{related_work_citations}}"
+
+    # Step 8: Write Related Work draft
+    - task:
+        name: "write_related_work"
+        instruction: |
+            **CRITICAL - NO FILE OPERATIONS ALLOWED**:
+            This step is for writing content only. You MUST NOT use fs_write, fs_read, fs_mkdir, or any other file operations.
+            DO NOT save any files. DO NOT create any directories. Only return the written content.
+            
+            {{write_system_prompt_related_work}}
+
+            Please write the Related Work section of the research paper. Follow the instructions and structure strictly.
+
+            **CRITICAL STRUCTURE REQUIREMENT**:
+            - Write **3 paragraphs** (at most 4 paragraphs)
+            - Each paragraph should focus on a distinct category or theme of related work
+            - Use \paragraph{Category Name} to start each paragraph
+            - Group related papers together within each paragraph
+
+            An example for related work is:
+
+            \section{Related Work}
+            \label{sec:related_work}
+
+            \paragraph{Graph Architecture Search}
+            Architecture search techniques have been applied to GNNs \cite{EXAMPLE_CITATION_1,EXAMPLE_CITATION_2}.
+            However, these works only focus on the design within each GNN layer instead of a general GNN design space,
+            and only evaluate the designs on a small number of node classification tasks.
+
+            \paragraph{Evaluation of GNN Models}
+            Multiple works discuss approaches for making fair comparison between GNN models \cite{EXAMPLE_CITATION_3,EXAMPLE_CITATION_4,EXAMPLE_CITATION_5}.
+            However, these models only consider some specific GNN designs (\eg, GCN, GAT, GraphSAGE), while our approach extensively explores the general design space of GNNs.
+
+            \paragraph{Other graph learning models} 
+            We focus on message passing GNNs due to their proven performance and efficient implementation over various GNN tasks. There are alternative designs of graph learning models \cite{EXAMPLE_CITATION_6,EXAMPLE_CITATION_7,EXAMPLE_CITATION_8,EXAMPLE_CITATION_9}, but their design spaces are different from GNNs and are less modularized.
+
+            \paragraph{Transferable Architecture Search}
+            The idea of transferring architecture search results across tasks has been studied in the context of computer vision tasks \cite{EXAMPLE_CITATION_10,EXAMPLE_CITATION_11}.
+            Meta-level architecture design has also been studied in \cite{EXAMPLE_CITATION_12,EXAMPLE_CITATION_13,EXAMPLE_CITATION_14,EXAMPLE_CITATION_15}, with the assumption that different tasks follow the same distribution (\eg, variants of ImageNet dataset \cite{EXAMPLE_CITATION_16}).
+            These approaches often make an assumption that a single neural architecture may perform well on all tasks, which fits well for tasks with relatively low variety.
+            However, due to the great variety of graph learning tasks, such assumption no longer holds.
+
+            Some tips for writing a strong Related Work section:
+
+            {{related_work_tips}}
+
+            - Academic siblings of our work, i.e. alternative attempts in literature at trying to solve the same problem.
+            - Goal is to “Compare and contrast” - how does their approach differ in either assumptions or method? If their method is applicable to our Problem Setting I expect a comparison in the experimental section. If not, there needs to be a clear statement why a given method is not applicable.
+            - Note: Just describing what another paper is doing is not enough. We need to compare and contrast.
+
+            **RESEARCH IDEA**:
+            {{idea_data}}
+
+            **CRITICAL - CITATION SOURCE RESTRICTION (READ CAREFULLY)**:
+            - The RESEARCH IDEA text may contain reference-like strings, citation keys, or a "References" list.
+            - You MUST NOT cite anything that comes from the RESEARCH IDEA text.
+            - You MUST cite ONLY from the provided `RELATED WORK CITATIONS` list below.
+            - The ONLY allowed citation keys are the bibtex keys explicitly provided in RELATED WORK CITATIONS.
+
+            You must ground your discussion using **only** the following pre-selected relevant papers.
+            Each paper is formatted as: **[bibtex_key]** Paper Title (authors, venue, year)
+
+            CRITICAL: When citing a paper, you MUST use the bibtex_key shown in square brackets [].
+            For example, if you see **[gao2019graphnas]** GraphNAS..., you must write \cite{gao2019graphnas}
+
+            Use LaTeX `\cite{...}` format **strictly** to reference these works. Do not add any new citations.
+            You must cite **all** of the following papers at least once using \cite{...}.
+            Do not leave out any item from the list.
+
+            **MEANINGFUL CITATION USAGE**:
+            - Each citation must support a specific claim about that paper's contribution or approach
+            - Cite papers when discussing their methods, findings, or limitations
+            - Group related papers together and cite them when making comparative statements
+            - Do NOT just list papers with citations at the end - integrate them into your arguments
+            - Example: "Prior work has explored X~\cite{paper1,paper2}, but these approaches suffer from Y~\cite{paper3,paper4}."
+
+            RELATED WORK CITATIONS:
+            {{related_work_citations}}
+            
+            Begin with:
+            \section{Related Work}
+            \label{sec:related_work}
+            ...
+        save_as: "related_work_draft"
+
+    # Step 9: Log step done to avoid long text output from last step overflow context window by carry over step
+    - task:
+        name: "related_work_draft_done"
+        instruction: |
+            **CRITICAL - NO FILE OPERATIONS ALLOWED**:
+            This is a logging step only. You MUST NOT use fs_write, fs_read, fs_mkdir, or any other file operations.
+            
+            **REQUIRED ACTION**:
+            Simply return a brief confirmation message: "Related Work draft is done."
+            
+            **FORBIDDEN ACTIONS**:
+            - DO NOT use fs_write to save any files (proposal.md, proposal.tex, README.md, etc.)
+            - DO NOT use fs_read to read any files
+            - DO NOT use fs_mkdir to create directories
+            - DO NOT provide detailed status reports or file listings
+            - DO NOT save intermediate results or summaries
+            
+            **ONLY RETURN**: "Related Work draft is done." 
+
+    # Step 10: Save Related Work section to file
+    - task:
+        name: "save_related_work"
+        instruction: |
+            **CRITICAL - NO DIRECTORY CREATION**:
+            - The sections/ directory has already been created in Step 1 (setup_environment)
+            - DO NOT use fs_mkdir to create {{output_dir}}/sections or any subdirectories
+            - DO NOT create any directories - they already exist
+            - Only use fs_write to save files to existing directories
+            
+            Save the Related Work section to: {{output_dir}}/sections/related_work.tex
+            
+            **CRITICAL - CONTENT BOUNDARIES**:
+            The content to save is provided below. It starts with "========== CONTENT TO SAVE (START) ==========" and ends with "========== CONTENT TO SAVE (END) ==========".
+            You MUST use ONLY the content between these markers as the `content` parameter for fs_write.
+            DO NOT include the markers themselves or any instruction text in the content.
+            DO NOT wrap the content in JSON format, quotes, or any other formatting.
+            DO NOT include any JSON closing characters like `"}` or `}`.
+            
+            ========== CONTENT TO SAVE (START) ==========
+            {{related_work_draft}}
+            ========== CONTENT TO SAVE (END) ==========
+            
+            Use fs_write tool with mode="text" to save the content.
+            
+            **CRITICAL PATH INFORMATION**:
+            - The ONLY correct path to use is: {{output_dir}}/sections/related_work.tex
+            - DO NOT use task_output_dir or any other path variable
+            - DO NOT ask which path to use - use {{output_dir}} ONLY
+            
+            **CRITICAL**: After saving, return ONLY a simple confirmation message.
+            DO NOT ask "Would you like me to..." or provide additional suggestions.
+            DO NOT offer to create additional files or formats.
+            Just return: "File saved: {{output_dir}}/sections/related_work.tex"
+        save_as: "save_related_work_result"
+
+    # Step 10.5: Fix Related Work LaTeX format in saved file
+    - task:
+        name: "fix_related_work_file"
+        instruction: |
+            Call the `fix_latex_file` tool to fix LaTeX format issues in the saved Related Work file.
+            
+            **CRITICAL**:
+            The file has already been saved in the previous step. You need to fix the format directly in the file.
+            
+            **EXACT FILE PATH** (use this exact path):
+            {{output_dir}}/sections/related_work.tex
+            
+            **INSTRUCTIONS**:
+            1. Call the `fix_latex_file` tool with the file path as the `file_path` parameter.
+            2. The tool will read the file, fix LaTeX format issues, and write the fixed content back to the file.
+            3. After the tool call succeeds, return ONLY: "LaTeX format fixed in {{output_dir}}/sections/related_work.tex"
+            
+            **DO NOT**:
+            - Read the file yourself
+            - Modify the file path
+            - Ask for confirmation
+            - Provide additional explanations
+        save_as: "fix_related_work_file_result"
+
+    # Step 10.1: Convert Related Work citations to JSON (using set_variable to avoid LLM access issues)
+    - set_variable:
+        name: "related_work_citations_json"
+        value: "json.dumps({{related_work_citations}}, indent=2, ensure_ascii=False)"
+    
+    # Step 10.2: Save Related Work citations to JSON file (backup)
+    - task:
+        name: "save_related_work_citations"
+        instruction: |
+            **CRITICAL - NO DIRECTORY CREATION**:
+            - The sections/ directory has already been created in Step 1 (setup_environment)
+            - DO NOT use fs_mkdir to create {{output_dir}}/sections or any subdirectories
+            - DO NOT create any directories - they already exist
+            - Only use fs_write to save files to existing directories
+            
+            **MANDATORY ACTION - NO QUESTIONS ALLOWED**:
+            You MUST immediately execute fs_write tool to save the file. DO NOT ask for confirmation, DO NOT ask about paths, DO NOT ask about format.
+            
+            **CRITICAL PATH INFORMATION**:
+            - The ONLY correct path to use is: {{output_dir}}/sections/related_work_citations.json
+            - DO NOT use task_output_dir or any other path variable
+            - DO NOT ask which path to use - use {{output_dir}} ONLY
+            
+            **EXACT FILE PATH** (use this exact path, do not modify):
+            {{output_dir}}/sections/related_work_citations.json
+            
+            **EXACT CONTENT TO SAVE**:
+            The previous step converted related_work_citations to JSON and saved it to context variable 'related_work_citations_json'.
+            
+            **CRITICAL**: The variable 'related_work_citations_json' contains the JSON string representation of the citations list.
+            
+            **CRITICAL - ONLY SAVE THE JSON CONTENT**:
+            - The file MUST contain ONLY the JSON content from {{related_work_citations_json}}
+            - DO NOT include any other text, metadata, or parameters
+            - DO NOT include "mode: text" or any other tool parameters in the file content
+            - The file content MUST be ONLY the JSON array: `[{...}, {...}, ...]`
+            - DO NOT add any extra lines, comments, or metadata after the JSON
+            
+            **EXECUTION STEPS** (execute immediately, no questions):
+            1. Call fs_write tool with EXACTLY these parameters:
+               - path: {{output_dir}}/sections/related_work_citations.json
+               - content: {{related_work_citations_json}}
+               - mode: "text"
+            2. **CRITICAL**: The `content` parameter MUST be TEXT (string type), NOT a Python object (list or dict). Even if the content appears as JSON format, you MUST pass it as a text string.
+            3. **CRITICAL**: The file saved MUST contain ONLY the JSON content. The file should start with `[` and end with `]`, with no additional text before or after.
+            4. Return ONLY: "File saved: {{output_dir}}/sections/related_work_citations.json"
+            
+            **FORBIDDEN ACTIONS**:
+            - DO NOT ask "Would you like me to..."
+            - DO NOT ask "Please confirm..."
+            - DO NOT ask "Which path should I use..."
+            - DO NOT provide explanations before saving
+            
+            Execute fs_write NOW without any questions.
+        save_as: "save_related_work_citations_result"
+
+    # Step 11: Write Introduction draft without citation enrichment
+    - task:
+        name: "write_introduction"
+        instruction: |
+            **CRITICAL - NO FILE OPERATIONS ALLOWED**:
+            This step is for writing content only. You MUST NOT use fs_write, fs_read, fs_mkdir, or any other file operations.
+            DO NOT save any files. Only return the written content.
+            
+            {{write_system_prompt}}
+
+            You are writing the Introduction section of a top-tier research paper proposal.
+            
+            **CRITICAL FORMAT REQUIREMENTS**:
+            - Use `\section{Introduction}` (single backslash), NOT `\\section{Introduction}` (double backslash - WRONG)
+            - Use `\cite{...}` (single backslash), NOT `\\cite{...}` (double backslash - WRONG)
+            - Use `\paragraph{...}` (single backslash), NOT `\\paragraph{...}` (double backslash - WRONG)
+            - Use `\textit{...}` (single backslash), NOT `\\textit{...}` (double backslash - WRONG)
+            - DO NOT output double backslashes anywhere - always use single backslash
+            - Example: Write `\section{Introduction}` NOT `\\section{Introduction}`
+
+            **CRITICAL - CITATION PLACEMENT**:
+            - DO NOT use placeholder citations like EXAMPLE_CITATION_1, EXAMPLE_CITATION_2, etc.
+            - If you need to cite related work but don't have specific citation keys yet, you can:
+              (1) Write the content without citations, and citations will be added in a later step, OR
+              (2) Use generic references like "prior work" or "recent studies" without \cite{} commands
+            - DO NOT copy EXAMPLE_CITATION placeholders from examples - they are just examples of structure, not actual citations to use
+            - The actual citations will be added in Step 20 (add_citation_for_intro_draft) after searching for relevant papers
+
+            An example for an introduction should look like (note: citations are placeholders for structure only, DO NOT use them):
+            
+            \section{Introduction}
+            \label{sec:introduction}
+
+            LLMs have proved to be powerful copilots in scientific research~\citep{EXAMPLE_CITATION_1}, demonstrating their great potential for accelerating scientific discovery.
+            Despite the promising finding, a more ambitious question remains: \textit{Can we simulate the human research community with LLMs}? Answering such a question has multiple benefits: (1) simulating the human research community helps understand the underlying process behind the discovery of existing research ideas; (2) it can further help democratize and accelerate the discovery process of new research ideas.
+
+            However, simulating the human research community is challenging, as it involves leveraging multiple LLM agents to interact with complex research data. While existing multi-agent LLM frameworks have been successfully applied to areas like social simulation~\citep{EXAMPLE_CITATION_2,EXAMPLE_CITATION_3} and game simulation~\citep{EXAMPLE_CITATION_4,EXAMPLE_CITATION_5}, they are not well-suited for simulating research communities due to the complexity of collaborative research activities like paper writing and review writing. Although recent efforts have explored research automation using LLMs, these frameworks are typically limited to specific research tasks, such as idea generation~\citep{EXAMPLE_CITATION_6, EXAMPLE_CITATION_7} or code experimentation~\citep{EXAMPLE_CITATION_8}, or focus on simulating single-agent workflows~\citep{EXAMPLE_CITATION_9}. These frameworks cannot simulate collaborative research activities where researchers with diverse backgrounds work together to brainstorm ideas, review papers, etc—processes that are fundamental to modern human research.
+
+            \paragraph{Research community as graph}
+            Our key observation is that the deeply interconnected research community can be naturally represented as graphs. Indeed, similar graph structures like citation networks~\citep{EXAMPLE_CITATION_10} and academic social networks~\citep{EXAMPLE_CITATION_11} have been extensively studied within data mining research, with proven values in applications such as citation prediction~\citep{EXAMPLE_CITATION_12}, recommendation~\citep{EXAMPLE_CITATION_13}, and community detection~\citep{EXAMPLE_CITATION_14}.
+            However, introducing LLMs to a graph-structured research community can extend these previous works from prediction and analysis with existing data to dynamic simulation and real-time forecasting.
+
+            \paragraph{Novel framework for research simulation}
+            In this work, we propose \envname, a simulator of the human research community. To bridge the gap between existing multi-agent simulation frameworks and the complexity of research activities, we propose a graph-based framework, inspired by the message-passing mechanism in Graph Neural Networks (GNNs), for multi-agent simulation.
+            Concretely, as shown in Figure \ref{fig:community-graph}, we propose a new concept of \textit{agent-data graph} with 2 generic types of nodes: (1) \textit{agent} nodes, suitable for entities like agents; (2) \textit{data} nodes, suitable for entities such as papers, reviews, and blogs.
+            Agent-data graphs are unique from standard heterogeneous graphs; here, the key conceptual difference between agent and data nodes is that an agent node can be considered a function over data nodes.
+            To inference on agent-data graphs, we propose a \textit{TextGNN} framework where message-passing processes are defined based on text-form information processing with LLMs, thanks to their strong in-context learning~\citep{EXAMPLE_CITATION_15} and reasoning~\citep{EXAMPLE_CITATION_16} ability.
+            We apply the proposed agent-data graph and TextGNN to the research simulation. Here, a research community can be regarded as a special form of agent-data graph, called \textit{community graph}, with research agents and research papers as two types of nodes, and we consider three types of edges (review, author, and cite) in the graph. Different community activities, such as paper writing and review writing, can be modeled as special message-passing processes on the community graph.
+
+            \paragraph{Novel evaluation for research simulation}
+            With \envname for research simulation, a further research question is to evaluate the quality of that. Prior works primarily use human evaluation with breakdown metrics such as novelty, excitement, feasibility, and expected effectiveness~\citep{EXAMPLE_CITATION_17,EXAMPLE_CITATION_18}. These approaches inevitably suffer from subjectiveness and high costs. In our work, since \envname functions as a simulator, our primary focus is on measuring how closely its outputs align with those of the real-world research community. Community graphs naturally provide a similarity-based evaluation method by masking a given paper node in the community graph and evaluating whether a simulator can reconstruct the masked nodes. This definition focuses on simulation similarity, making it scalable and objective. Based on such a node masking prediction task, we build a benchmark called \benchname with 1,000 paper writing tasks and 200 review writing tasks requiring multi-agent collaboration.
+
+            \paragraph{Main discoveries} Based on the evaluation results from \benchname, we highlight three key findings: (1) \envname effectively simulates collaborative research activities, achieving an average similarity score of 0.68 for paper writing and 0.49 for review writing, as measured by the state-of-the-art text embedding model; (2) \envname demonstrates robustness and effectiveness in research simulation, showing improvement when more agents are added and maintaining performance when including unrelated papers; (3) \envname inspires interdisciplinary research, generating innovative ideas that combine insights from NLP, criminology, and astronomy and does not exist in the real-world research.
+
+
+            Some tips are provided below:
+            {{introduction_tips}}
+
+            **RESEARCH IDEA**:
+            {{idea_data}}
+
+            **IMPORTANT**: You have access to previously written sections (if any). Make sure your Introduction builds upon and expands the Abstract naturally, while incorporating insights from the Related Work to position your contribution in the broader research context.
+
+            **Previous sections (Abstract, Related Work, etc.):**
+            
+            {{related_work_draft}}
+
+            **CRITICAL - CITATION SOURCE RESTRICTION IN THIS STEP**:
+            - In this step, you are ONLY allowed to use citation keys that already appear in the provided `Previous sections` above.
+            - DO NOT introduce any new citation keys in this step.
+            - DO NOT cite anything that appears in the RESEARCH IDEA text (even if it looks like a citation key).
+
+            **Your goal is to write a compelling, multi-paragraph introduction** that logically develops the background, motivation, and research gap. The tone should be formal, informative, and engaging.
+
+            Be sure to use \cite or \citet where relevant, referring to the works provided in the file.
+            Do not cite anything that is not already in `references.bib`. Do not add any new entries to this.
+
+            **Citation Usage**: Each citation must support a specific claim in that sentence (e.g., cite prior work when stating what has been done before, cite foundational work when introducing concepts).
+
+            Use at **5 paragraphs**, and aim for **250-300 words**.
+
+            Keep the experimental results (figures and tables) only in the Results section, and make sure that any captions are filled in.
+            In this pass, do not reference anything in later sections of the paper.
+
+            Begin with:
+            \section{Introduction}
+            \label{sec:introduction}
+            ...
+        save_as: "unenriched_introduction_draft"
+
+    # Step 12: Log step done to avoid long text output from last step overflow context window by carry over step
+    - task:
+        name: "introduction_unenriched_draft_done"
+        instruction: |
+            **CRITICAL - NO FILE OPERATIONS ALLOWED**:
+            This is a logging step only. You MUST NOT use fs_write, fs_read, fs_mkdir, or any other file operations.
+            
+            **REQUIRED ACTION**:
+            Simply return a brief confirmation message: "Unenriched introduction draft is done."
+            
+            **FORBIDDEN ACTIONS**:
+            - DO NOT use fs_write to save any files (proposal.tex, proposal.md, introduction_log_excerpt.txt, etc.)
+            - DO NOT use fs_read to read any files
+            - DO NOT use fs_mkdir to create directories
+            - DO NOT provide detailed status reports or file listings
+            - DO NOT save intermediate results or summaries
+            
+            **ONLY RETURN**: "Unenriched introduction draft is done." 
+
+    # Step 13: Create citation search query for Introduction section
+    - task:
+        name: "create_enrich_citation_query_for_intro"
+        instruction: |
+            {{citation_system_prompt}}
+
+            You will generate search queries to find relevant papers for citation in the Introduction section.
+
+            **CONTEXT**:
+            - Idea: {{idea_data}}
+                Focus on fields: Title, Problem, Importance, Difficulty, NoveltyComparison, Approach, Experiment etc.
+
+            - Section Content:
+                {{unenriched_introduction_draft}}
+
+            **YOUR TASK**: Read the IDEA and SECTION CONTENT above and extract 2-3 SPECIFIC technical terms FROM THEM to create 3 search queries.
+
+            **CRITICAL STEP-BY-STEP**:
+            1. READ the idea and the section snippet carefully
+            2. IDENTIFY specific techniques/algorithms/models (e.g., "graph attention network", "knowledge distillation", "BERT")
+            3. IDENTIFY the task/application when present (e.g., "link prediction", "question answering")
+            4. CREATE queries as: "specific_technique AND specific_task" (if task is present), otherwise combine 2-3 specific techniques
+            5. DO NOT use generic terms; use only concrete technical terminology
+
+            **TYPES OF SPECIFIC TERMS TO EXTRACT**:
+            ✅ Specific models: "BERT", "GPT-4", "T5", "ResNet"
+            ✅ Specific architectures: "graph attention network", "encoder-decoder"
+            ✅ Specific techniques: "knowledge distillation", "contrastive learning", "adversarial training"
+            ✅ Specific mechanisms: "multi-head attention", "cross-attention", "tree-based reasoning"
+            ✅ Specific tasks: "question answering", "sentiment analysis", "link prediction"
+            ✅ Specific datasets/benchmarks: "SQuAD", "GLUE", "ImageNet"
+
+            **WHAT TO AVOID**:
+            ❌ "deep learning", "machine learning", "AI"
+            ❌ "neural networks" (specify which type)
+            ❌ Domain-only terms: "NLP", "CV"
+            ❌ Vague phrases: "improve performance", "state-of-the-art"
+
+            **FORMAT EXAMPLES** (structure only):
+            - If idea/snippet mentions "BERT for question answering" → "BERT AND question answering"
+            - If mentions "graph attention on citation networks" → "graph attention network AND citation network"
+            - If discusses "knowledge distillation for language models" → "knowledge distillation AND language model"
+
+            **OUTPUT FORMAT**:
+            Return ONLY a JSON array of 3 query strings with no extra commentary.
+
+            Example:
+            [
+                "graph attention network AND link prediction",
+                "knowledge distillation AND language model",
+                "multi-head attention AND machine translation",
+                ...
+            ]
+        save_as: "enrich_citation_query_for_intro"
+
+    # Step 14: Prepare parallel params for introduction citation search
+    - task:
+        name: "prepare_citation_search_params_for_introduction"
+        instruction: |
+            From the citation queries: {{enrich_citation_query_for_intro}}
+
+            Create a parameter list for parallel citation search module calls.
+
+            For each query in the list:
+            Create a parameter dictionary:
+            {
+                "query": "the search query",
+                "max_papers": 1
+            }
+
+            Combine all into a single list:
+            [
+                {"query": "query1", "max_papers": 1},
+                {"query": "query2", "max_papers": 1},
+                ...
+            ]
+
+            Return ONLY the JSON array with no extra commentary.
+        save_as: "citation_search_params_introduction"
+    
+    # Step 15: Parallel Citation Search for Introduction
+    - parallel:
+        module: "./modules/search_citations.yaml"
+        parameters_list: "citation_search_params_introduction"
+        save_results_as: "introduction_citations_raw"
+        max_workers: "max_citation_workers"
+
+
+    # Step 16: Process searched citations into a list
+    - set_variable:
+        name: "introduction_citations"
+        value: "sum (list( {{introduction_citations_raw}}.values() ), [] )"
+
+    # Step 16.5: Normalize bibtex keys to LastName_Year format
+    - task:
+        name: "normalize_introduction_citation_keys"
+        instruction: |
+            **CRITICAL TASK**: Normalize bibtex keys to LastName_Year format. Process the citations list below and return a complete Python list.
+            
+            **NO TOOLS ALLOWED** - Return ONLY the modified list, no file operations.
+            
+            Citations list:
+            {{introduction_citations}}
+            
+            **REQUIREMENTS**:
+            1. For each citation, extract the bibtex key (after @type{ and before first comma)
+            2. If key is NOT LastName_Year format (e.g., URL):
+               - Extract FIRST author's LAST NAME from bibtex 'author' field
+               - Extract 'year' from bibtex
+               - Generate key: LastName_Year (e.g., "Alakhdar_2025")
+               - If missing author/year: use "AuthorX_YYYY" format (unique)
+               - If conflict: append letter (e.g., "Alakhdar_2025a")
+               - Replace ONLY the key in bibtex string, keep everything else EXACTLY the same
+            3. **CRITICAL**: Preserve EVERYTHING except the key:
+               - Keep all other bibtex content (spaces, commas, formatting) EXACTLY the same
+               - Keep file_path, title, abstract fields EXACTLY the same
+               - Keep dictionary structure EXACTLY the same
+            
+            **OUTPUT**:
+            - Return a complete Python list: `[{...}, {...}, ...]`
+            - MUST start with `[` and end with `]`
+            - MUST include ALL citations with ALL fields: bibtex, file_path, title, abstract
+            - Return ONLY the list, no explanations
+        save_as: "introduction_citations"
+    
+    # Step 16.6: Log normalization done
+    - task:
+        name: "normalize_introduction_citation_keys_done"
+        instruction: |
+            **CRITICAL - NO FILE OPERATIONS ALLOWED**:
+            This is a logging step only. You MUST NOT use fs_write, fs_read, fs_mkdir, or any other file operations.
+            
+            **REQUIRED ACTION**:
+            Simply return a brief confirmation message: "Introduction citation keys normalization is done."
+            
+            **FORBIDDEN ACTIONS**:
+            - DO NOT use fs_write to save any files
+            - DO NOT use fs_read to read any files
+            - DO NOT use fs_mkdir to create directories
+            - DO NOT provide detailed status reports or file listings
+            - DO NOT save intermediate results or summaries
+            
+            Return ONLY the confirmation message.
+        save_as: "normalize_introduction_citation_keys_result"
+
+    # Step 17: Add citations to global citation list for future use
+    - set_variable:
+        name: "all_citation"
+        value: "{{all_citation}} + {{introduction_citations}}"
+    
+    # Step 18: (Deduplication removed to avoid eval failures)
+    
+    # Step 19: Log citation search done
+    - task:
+        name: "log"
+        instruction: |
+            **CRITICAL - NO FILE OPERATIONS ALLOWED**:
+            This step is for logging only. You MUST NOT use fs_write, fs_read, fs_mkdir, or any other file operations.
+            DO NOT create docs/ directory or save any files (introduction_citations_log.md, citations_list.txt, references_export.md, references.bib, etc.).
+            DO NOT save any files. Only return a simple confirmation message.
+            
+            **REQUIRED ACTION**:
+            Simply return a brief confirmation message: "Introduction citations collection is done."
+            
+            **FORBIDDEN ACTIONS**:
+            - DO NOT use fs_write to save any files (introduction_citations_log.md, citations_list.txt, references_export.md, references.bib, etc.)
+            - DO NOT use fs_read to read any files
+            - DO NOT use fs_mkdir to create directories (docs/, etc.)
+            - DO NOT provide detailed status reports or file listings
+            - DO NOT save intermediate results or summaries
+            
+            **ONLY RETURN**: "Introduction citations collection is done."
+
+    # Step 19.1: Create simplified citation format for instruction (avoid variable expansion timeout)
+    - set_variable:
+        name: "introduction_citations_simple"
+        value: "[{'bibtex_key': c.get('bibtex', '').split('{')[1].split(',')[0] if '{' in c.get('bibtex', '') else '', 'title': c.get('title', '')} for c in {{introduction_citations}}]"
+
+    # Step 20: Enrich introduction draft with new searched papers
+    - task:
+        name: "add_citation_for_intro_draft"
+        instruction: |
+            {{citation_system_prompt}}
+
+            You are adding NEW citations to the Introduction section.
+
+            **Current section content**:
+            {{unenriched_introduction_draft}}
+
+            **NEW papers to cite** (cite ALL of these):
+            {{introduction_citations_simple}}
+            
+            **IMPORTANT**: Each entry contains 'bibtex_key' and 'title'. Use the 'bibtex_key' for citations (e.g., \cite{bibtex_key}).
+            The full citation details (including abstract) are available in the context variable 'introduction_citations' if needed, but you should primarily use the simplified format above.
+
+            **CRITICAL INSTRUCTIONS**:
+            1. Each paper entry in the simplified format contains 'bibtex_key' and 'title'.
+            2. Use the 'bibtex_key' directly for citations (e.g., \cite{bibtex_key})
+            3. Add citations using \cite{bibtex_key} format (single backslash, NOT double backslash)
+            4. Cite ALL new papers provided above
+            5. Keep ALL existing citations and content intact
+            6. Add new citations in contextually appropriate places
+            7. If needed, expand 1-2 sentences to naturally incorporate citations
+            8. Do NOT remove or change existing citations
+            9. **CRITICAL**: Use `\cite{...}` (single backslash), NOT `\\cite{...}` (double backslash - WRONG)
+            10. Example: Write `\cite{Gao_2024}` NOT `\\cite{Gao_2024}`
+            
+            **CRITICAL - ALLOWED NEW CITATIONS IN THIS STEP (STRICT)**:
+            - The ONLY new citation keys you may add are those listed in `NEW papers to cite` above.
+            - You MUST NOT add any other citation keys (do not invent keys, and do not use keys mentioned anywhere else).
+            
+            **CRITICAL - DO NOT APPEND ANY LISTS / HEADERS**:
+            - Your task is to **embed** the provided citations into the Introduction text:
+              - Insert `\cite{bibtex_key}` into appropriate sentences where that paper supports the specific claim.
+              - If needed, add 1-2 sentences to naturally motivate and introduce the citation.
+              - The result must read like a normal paper Introduction, NOT like a “citation list output”.
+            - You MUST NOT output any extra lines like:
+              - `\textbf{NEW papers to cite} ...`
+              - `NEW papers to cite (cite ALL of these): ...`
+              - Any JSON / Python lists of papers
+            - The list above is INPUT ONLY. It must NOT appear in your output.
+            - Your output must remain a normal Introduction section (starting with `\section{Introduction}` followed by `\label{sec:introduction}`), with citations integrated into sentences.
+
+            **MEANINGFUL CITATION PLACEMENT**:
+            - Each citation MUST directly support the specific claim or statement in that sentence
+            - Place citations immediately after the claim they support (e.g., "Recent work shows improvement~\cite{Smith2024}.")
+            - Read each paper's abstract to understand what it claims, then cite it where that claim is relevant
+            - Do NOT add citations randomly or at the end of unrelated sentences
+            - If you need to cite a paper but no suitable sentence exists, add a new sentence that makes a claim the paper supports
+            - Example: If a paper proposes a new architecture, cite it when discussing that architecture, NOT when discussing datasets
+            
+            **OUTPUT REQUIREMENT**:
+            - Output ONLY the updated Introduction LaTeX content (no commentary, no lists).
+            - The output must start with `\section{Introduction}` followed by `\label{sec:introduction}` and contain only the section content.
+        save_as: "enriched_introduction_draft"
+
+    # Step 21: Save Introduction section to file
+    - task:
+        name: "save_introduction"
+        instruction: |
+            **CRITICAL - NO DIRECTORY CREATION**:
+            - The sections/ directory has already been created in Step 1 (setup_environment)
+            - DO NOT use fs_mkdir to create {{output_dir}}/sections or any subdirectories
+            - DO NOT create any directories - they already exist
+            - Only use fs_write to save files to existing directories
+            
+            Save the Introduction section to: {{output_dir}}/sections/introduction.tex
+            
+            **CRITICAL - CONTENT BOUNDARIES**:
+            The content to save is provided below. It starts with "========== CONTENT TO SAVE (START) ==========" and ends with "========== CONTENT TO SAVE (END) ==========".
+            You MUST use ONLY the content between these markers as the `content` parameter for fs_write.
+            DO NOT include the markers themselves or any instruction text in the content.
+            DO NOT wrap the content in JSON format, quotes, or any other formatting.
+            DO NOT include any JSON closing characters like `"}` or `}`.
+            
+            ========== CONTENT TO SAVE (START) ==========
+            {{enriched_introduction_draft}}
+            ========== CONTENT TO SAVE (END) ==========
+            
+            Use fs_write tool with mode="text" to save the content.
+            
+            **CRITICAL PATH INFORMATION**:
+            - The ONLY correct path to use is: {{output_dir}}/sections/introduction.tex
+            - DO NOT use task_output_dir or any other path variable
+            - DO NOT ask which path to use - use {{output_dir}} ONLY
+            
+            **CRITICAL**: After saving, return ONLY a simple confirmation message.
+            DO NOT ask "Would you like me to..." or provide additional suggestions.
+            DO NOT offer to create additional files or formats.
+            Just return: "File saved: {{output_dir}}/sections/introduction.tex"
+        save_as: "save_introduction_result"
+
+    # Step 21.5: Fix Introduction LaTeX format in saved file
+    - task:
+        name: "fix_introduction_file"
+        instruction: |
+            Call the `fix_latex_file` tool to fix LaTeX format issues in the saved Introduction file.
+            
+            **CRITICAL**:
+            The file has already been saved in the previous step. You need to fix the format directly in the file.
+            
+            **EXACT FILE PATH** (use this exact path):
+            {{output_dir}}/sections/introduction.tex
+            
+            **INSTRUCTIONS**:
+            1. Call the `fix_latex_file` tool with the file path as the `file_path` parameter.
+            2. The tool will read the file, fix LaTeX format issues, and write the fixed content back to the file.
+            3. After the tool call succeeds, return ONLY: "LaTeX format fixed in {{output_dir}}/sections/introduction.tex"
+            
+            **DO NOT**:
+            - Read the file yourself
+            - Modify the file path
+            - Ask for confirmation
+            - Provide additional explanations
+        save_as: "fix_introduction_file_result"
+
+    # Step 21.1: Convert Introduction citations to JSON (using set_variable to avoid LLM access issues)
+    - set_variable:
+        name: "introduction_citations_json"
+        value: "json.dumps({{introduction_citations}}, indent=2, ensure_ascii=False)"
+    
+    # Step 21.2: Save Introduction citations to JSON file (backup)
+    - task:
+        name: "save_introduction_citations"
+        instruction: |
+            **CRITICAL - NO DIRECTORY CREATION**:
+            - The sections/ directory has already been created in Step 1 (setup_environment)
+            - DO NOT use fs_mkdir to create {{output_dir}}/sections or any subdirectories
+            - DO NOT create any directories - they already exist
+            - Only use fs_write to save files to existing directories
+            
+            **MANDATORY ACTION - NO QUESTIONS ALLOWED**:
+            You MUST immediately execute fs_write tool to save the file. DO NOT ask for confirmation, DO NOT ask about paths, DO NOT ask about format.
+            
+            **CRITICAL PATH INFORMATION**:
+            - The ONLY correct path to use is: {{output_dir}}/sections/introduction_citations.json
+            - DO NOT use task_output_dir or any other path variable
+            - DO NOT ask which path to use - use {{output_dir}} ONLY
+            
+            **EXACT FILE PATH** (use this exact path, do not modify):
+            {{output_dir}}/sections/introduction_citations.json
+            
+            **EXACT CONTENT TO SAVE**:
+            The previous step converted introduction_citations to JSON and saved it to context variable 'introduction_citations_json'.
+            
+            **CRITICAL**: The variable 'introduction_citations_json' contains the JSON string representation of the citations list.
+            
+            **CRITICAL - ONLY SAVE THE JSON CONTENT**:
+            - The file MUST contain ONLY the JSON content from {{introduction_citations_json}}
+            - DO NOT include any other text, metadata, or parameters
+            - DO NOT include "mode: text" or any other tool parameters in the file content
+            - The file content MUST be ONLY the JSON array: `[{...}, {...}, ...]`
+            - DO NOT add any extra lines, comments, or metadata after the JSON
+            
+            **EXECUTION STEPS** (execute immediately, no questions):
+            1. Call fs_write tool with EXACTLY these parameters:
+               - path: {{output_dir}}/sections/introduction_citations.json
+               - content: {{introduction_citations_json}}
+               - mode: "text"
+            2. **CRITICAL**: The `content` parameter MUST be TEXT (string type), NOT a Python object (list or dict). Even if the content appears as JSON format, you MUST pass it as a text string.
+            3. **CRITICAL**: The file saved MUST contain ONLY the JSON content. The file should start with `[` and end with `]`, with no additional text before or after.
+            4. Return ONLY: "File saved: {{output_dir}}/sections/introduction_citations.json"
+            
+            **FORBIDDEN ACTIONS**:
+            - DO NOT ask "Would you like me to..."
+            - DO NOT ask "Please confirm..."
+            - DO NOT ask "Which path should I use..."
+            - DO NOT provide explanations before saving
+            - DO NOT parse introduction_citations_json as JSON - use it as a string
+            
+            Execute fs_write NOW without any questions.
+        save_as: "save_introduction_citations_result"
+
+    # Step 22: Write Method section
+    - call:
+        module: "./modules/write_method.yaml"
+        parameters:
+            write_system_prompt: "{{write_system_prompt}}"
+            idea_data: "{{idea_data}}"
+            method_tips: "{{method_tips}}"
+            related_work_draft: "{{related_work_draft}}"
+            enriched_introduction_draft: "{{enriched_introduction_draft}}"
+        save_as: "method_draft"
+        return: "method_draft"
+
+    # Step 22.5: Log step done to avoid long text output carry-over
+    - task:
+        name: "method_draft_done"
+        instruction: |
+            **CRITICAL - NO FILE OPERATIONS ALLOWED**:
+            This is a logging step only. You MUST NOT use fs_write, fs_read, fs_mkdir, or any other file operations.
+            
+            **REQUIRED ACTION**:
+            Simply return a brief confirmation message: "Method draft is done."
+            
+            **FORBIDDEN ACTIONS**:
+            - DO NOT use fs_write to save any files
+            - DO NOT use fs_read to read any files
+            - DO NOT use fs_mkdir to create directories
+            - DO NOT provide detailed status reports or file listings
+            - DO NOT save intermediate results or summaries
+            
+            **ONLY RETURN**: "Method draft is done."
+
+    # Step 23: Save Method section to file
+    - task:
+        name: "save_method"
+        instruction: |
+            **CRITICAL - NO DIRECTORY CREATION**:
+            - The sections/ directory has already been created in Step 1 (setup_environment)
+            - DO NOT use fs_mkdir to create {{output_dir}}/sections or any subdirectories
+            - DO NOT create any directories - they already exist
+            - Only use fs_write to save files to existing directories
+            
+            Save the Method section to: {{output_dir}}/sections/method.tex
+            
+            **CRITICAL - CONTENT BOUNDARIES**:
+            The content to save is provided below. It starts with "========== CONTENT TO SAVE (START) ==========" and ends with "========== CONTENT TO SAVE (END) ==========".
+            You MUST use ONLY the content between these markers as the `content` parameter for fs_write.
+            DO NOT include the markers themselves or any instruction text in the content.
+            DO NOT wrap the content in JSON format, quotes, or any other formatting.
+            DO NOT include any JSON closing characters like `"}` or `}`.
+            
+            ========== CONTENT TO SAVE (START) ==========
+            {{method_draft}}
+            ========== CONTENT TO SAVE (END) ==========
+            
+            Use fs_write tool with mode="text" to save the content.
+            
+            **CRITICAL PATH INFORMATION**:
+            - The ONLY correct path to use is: {{output_dir}}/sections/method.tex
+            - DO NOT use task_output_dir or any other path variable
+            - DO NOT ask which path to use - use {{output_dir}} ONLY
+            
+            **CRITICAL**: After saving, return ONLY a simple confirmation message.
+            DO NOT ask "Would you like me to..." or provide additional suggestions.
+            DO NOT offer to create additional files or formats.
+            Just return: "File saved: {{output_dir}}/sections/method.tex"
+        save_as: "save_method_result"
+
+    # Step 24: Write Experimental Setup section
+    - call:
+        module: "./modules/write_experimental_setup.yaml"
+        parameters:
+            write_system_prompt: "{{write_system_prompt}}"
+            idea_data: "{{idea_data}}"
+            experimental_setup_tips: "{{experimental_setup_tips}}"
+            related_work_draft: "{{related_work_draft}}"
+            enriched_introduction_draft: "{{enriched_introduction_draft}}"
+            method_draft: "{{method_draft}}"
+        save_as: "experimental_setup_draft"
+        return: "experimental_setup_draft"
+
+    # Step 24.5: Log step done to avoid long text output carry-over
+    - task:
+        name: "experimental_setup_draft_done"
+        instruction: |
+            **CRITICAL - NO FILE OPERATIONS ALLOWED**:
+            This is a logging step only. You MUST NOT use fs_write, fs_read, fs_mkdir, or any other file operations.
+            
+            **REQUIRED ACTION**:
+            Simply return a brief confirmation message: "Experimental Setup draft is done."
+            
+            **FORBIDDEN ACTIONS**:
+            - DO NOT use fs_write to save any files
+            - DO NOT use fs_read to read any files
+            - DO NOT use fs_mkdir to create directories
+            - DO NOT provide detailed status reports or file listings
+            - DO NOT save intermediate results or summaries
+            
+            **ONLY RETURN**: "Experimental Setup draft is done."
+
+    
+    # Step 25: Save Experimental Setup section to file
+    - task:
+        name: "save_experimental_setup"
+        instruction: |
+            **CRITICAL - NO DIRECTORY CREATION**:
+            - The sections/ directory has already been created in Step 1 (setup_environment)
+            - DO NOT use fs_mkdir to create {{output_dir}}/sections or any subdirectories
+            - DO NOT create any directories - they already exist
+            - Only use fs_write to save files to existing directories
+            
+            Save the Experimental Setup section to: {{output_dir}}/sections/experimental_setup.tex
+            
+            **CRITICAL - CONTENT BOUNDARIES**:
+            The content to save is provided below. It starts with "========== CONTENT TO SAVE (START) ==========" and ends with "========== CONTENT TO SAVE (END) ==========".
+            You MUST use ONLY the content between these markers as the `content` parameter for fs_write.
+            DO NOT include the markers themselves or any instruction text in the content.
+            DO NOT wrap the content in JSON format, quotes, or any other formatting.
+            DO NOT include any JSON closing characters like `"}` or `}`.
+            
+            ========== CONTENT TO SAVE (START) ==========
+            {{experimental_setup_draft}}
+            ========== CONTENT TO SAVE (END) ==========
+            
+            Use fs_write tool with mode="text" to save the content.
+            
+            **CRITICAL PATH INFORMATION**:
+            - The ONLY correct path to use is: {{output_dir}}/sections/experimental_setup.tex
+            - DO NOT use task_output_dir or any other path variable
+            - DO NOT ask which path to use - use {{output_dir}} ONLY
+            
+            **CRITICAL**: After saving, return ONLY a simple confirmation message.
+            DO NOT ask "Would you like me to..." or provide additional suggestions.
+            DO NOT offer to create additional files or formats.
+            Just return: "File saved: {{output_dir}}/sections/experimental_setup.tex"
+        save_as: "save_experimental_setup_result"
+
+    # Step 26: Write Abstract section
+    - task:
+        name: "write_abstract"
+        instruction: |
+            **CRITICAL - NO FILE OPERATIONS ALLOWED**:
+            This step is for writing content only. You MUST NOT use fs_write, fs_read, fs_mkdir, or any other file operations.
+            DO NOT save any files. DO NOT create any directories. Only return the written content.
+            
+            {{write_system_prompt}}
+
+            You are writing the Abstract section of a top-tier AI research paper.
+            Some tips are provided below:
+            {{abstract_tips}}
+
+            Here is the research idea that the paper is based on:
+            {{idea_data}}
+
+            IMPORTANT: The full paper has already been written. Below is the complete content of all sections.
+            Your task is to write an abstract that accurately summarizes what was actually written in the paper,
+            not just the initial idea. Pay attention to the actual methods used, experiments conducted, and results obtained.
+
+            === FULL PAPER CONTENT ===
+            \section{Related Work}
+            {{related_work_draft}}
+
+            \section{Introduction}
+            {{enriched_introduction_draft}}
+
+            \section{Method}
+            {{method_draft}}
+
+            \section{Experimental Setup}
+            {{experimental_setup_draft}}
+            === END OF PAPER CONTENT ===
+
+            Based on the full paper content above, write a concise abstract that:
+            1. States the problem addressed in the paper
+            2. Explains why it's important and challenging
+            3. Describes the proposed solution/method
+            4. Summarizes the key experimental setup and plan (this is a proposal, so focus on planned experiments, not results)
+            5. Highlights the main contributions
+
+            **NOTE**: This is a proposal paper, so focus on the experimental setup and plan rather than results.
+
+            **CRITICAL - NO CITATIONS OR FORMULAS**:
+            - DO NOT use any citations (e.g., \cite{...}, \citep{...}, \citet{...})
+            - DO NOT include any mathematical formulas (e.g., $...$, \(...\), \[...\], \begin{equation}...\end{equation})
+            - DO NOT use any LaTeX math mode commands
+            - Write in plain text only, describing the research in natural language
+            - If you need to mention mathematical concepts, describe them in words (e.g., "minimization of the loss function" instead of formulas)
+
+            The output must be pure LaTeX and enclosed with \begin{abstract} ... \end{abstract}.
+            
+            **CRITICAL FORMAT REQUIREMENTS**:
+            - Use actual line breaks (press Enter), NOT literal `\n` characters
+            - Use `\end{abstract}` (single backslash), NOT `\\end{abstract}` (double backslash - WRONG)
+            - Use `\begin{abstract}` (single backslash), NOT `\\begin{abstract}` (double backslash - WRONG)
+            - DO NOT output literal `\n` anywhere in the text - use actual newlines
+            - DO NOT output double backslashes anywhere - always use single backslash
+            - Example: Write `\begin{abstract}` and `\end{abstract}` NOT `\\begin{abstract}` and `\\end{abstract}`
+            - Example of correct format:
+              \begin{abstract}
+              
+              Your abstract content here.
+              
+              \end{abstract}
+
+            Begin with:
+            \begin{abstract}
+            ...
+            End with:
+            \end{abstract}
+        save_as: "abstract_draft"
+
+    # Step 27: Save Abstract section to file
+    - task:
+        name: "save_abstract"
+        instruction: |
+            **CRITICAL - NO DIRECTORY CREATION**:
+            - The sections/ directory has already been created in Step 1 (setup_environment)
+            - DO NOT use fs_mkdir to create {{output_dir}}/sections or any subdirectories
+            - DO NOT create any directories - they already exist
+            - Only use fs_write to save files to existing directories
+            
+            Save the Abstract section to: {{output_dir}}/sections/abstract.tex
+            
+            **CRITICAL - CONTENT BOUNDARIES**:
+            The content to save is provided below. It starts with "========== CONTENT TO SAVE (START) ==========" and ends with "========== CONTENT TO SAVE (END) ==========".
+            You MUST use ONLY the content between these markers as the `content` parameter for fs_write.
+            DO NOT include the markers themselves or any instruction text in the content.
+            DO NOT wrap the content in JSON format, quotes, or any other formatting.
+            DO NOT include any JSON closing characters like `"}` or `}`.
+            
+            ========== CONTENT TO SAVE (START) ==========
+            {{abstract_draft}}
+            ========== CONTENT TO SAVE (END) ==========
+            
+            Use fs_write tool with mode="text" to save the content.
+            
+            **CRITICAL PATH INFORMATION**:
+            - The ONLY correct path to use is: {{output_dir}}/sections/abstract.tex
+            - DO NOT use task_output_dir or any other path variable
+            - DO NOT ask which path to use - use {{output_dir}} ONLY
+            
+            **CRITICAL**: After saving, return ONLY a simple confirmation message.
+            DO NOT ask "Would you like me to..." or provide additional suggestions.
+            DO NOT offer to create additional files or formats.
+            Just return: "File saved: {{output_dir}}/sections/abstract.tex"
+        save_as: "save_abstract_result"
+
+    # Step 27.5: Fix Abstract LaTeX format in saved file
+    - task:
+        name: "fix_abstract_file"
+        instruction: |
+            Call the `fix_latex_file` tool to fix LaTeX format issues in the saved Abstract file.
+            
+            **CRITICAL**:
+            The file has already been saved in the previous step. You need to fix the format directly in the file.
+            
+            **EXACT FILE PATH** (use this exact path):
+            {{output_dir}}/sections/abstract.tex
+            
+            **INSTRUCTIONS**:
+            1. Call the `fix_latex_file` tool with the file path as the `file_path` parameter.
+            2. The tool will read the file, fix LaTeX format issues, and write the fixed content back to the file.
+            3. After the tool call succeeds, return ONLY: "LaTeX format fixed in {{output_dir}}/sections/abstract.tex"
+            
+            **DO NOT**:
+            - Read the file yourself
+            - Modify the file path
+            - Ask for confirmation
+            - Provide additional explanations
+        save_as: "fix_abstract_file_result"
+
+    # Step 27.1: Convert all citations to JSON (using set_variable to avoid LLM access issues)
+    - set_variable:
+        name: "all_citations_json"
+        value: "json.dumps({{all_citation}}, indent=2, ensure_ascii=False)"
+    
+    # Step 28: Save all citations to reference.json
+    - task:
+        name: "save_references"
+        instruction: |
+            **CRITICAL - NO DIRECTORY CREATION**:
+            - The sections/ directory has already been created in Step 1 (setup_environment)
+            - DO NOT use fs_mkdir to create {{output_dir}}/sections or any subdirectories
+            - DO NOT create any directories - they already exist
+            - Only use fs_write to save files to existing directories
+            
+            **MANDATORY ACTION - NO QUESTIONS ALLOWED**:
+            You MUST immediately execute fs_write tool to save the file. DO NOT ask for confirmation, DO NOT ask about batch processing, DO NOT ask about format.
+            
+            **CRITICAL PATH INFORMATION**:
+            - The ONLY correct path to use is: {{output_dir}}/sections/reference.json
+            - DO NOT use task_output_dir or any other path variable
+            - DO NOT ask which path to use - use {{output_dir}}/sections/ ONLY
+            
+            **EXACT FILE PATH** (use this exact path, do not modify):
+            {{output_dir}}/sections/reference.json
+            
+            **EXACT CONTENT TO SAVE**:
+            The previous step converted all_citation to JSON and saved it to context variable 'all_citations_json'.
+            
+            **CRITICAL**: The variable 'all_citations_json' contains the JSON string representation of all citations.
+            
+            **EXECUTION STEPS** (execute immediately, no questions):
+            1. Call fs_write tool with EXACTLY these parameters:
+               - path: {{output_dir}}/sections/reference.json
+               - content: {{all_citations_json}}
+               - mode: "text"
+            2. **CRITICAL**: The `content` parameter MUST be TEXT (string type), NOT a Python object (list or dict). Even if the content appears as JSON format, you MUST pass it as a text string.
+            3. Return ONLY: "File saved: {{output_dir}}/sections/reference.json"
+            2. Return ONLY: "File saved: {{output_dir}}/sections/reference.json"
+            
+            **FORBIDDEN ACTIONS**:
+            - DO NOT ask "Would you like me to..."
+            - DO NOT ask "Please confirm..."
+            - DO NOT ask "Which path should I use..."
+            - DO NOT provide explanations before saving
+            - DO NOT parse all_citations_json as JSON - use it as a string
+            
+            Execute fs_write NOW without any questions.
+        save_as: "save_references_result"
+
+    # Step 28.5: Convert reference.json to references.bib
+    - task:
+        name: "convert_references_to_bibtex"
+        instruction: |
+            **CRITICAL - USE ONLY ONE TOOL**:
+            You MUST use ONLY the `json_to_bibtex` tool. DO NOT use any other tools.
+            DO NOT use fs_read, fs_write, or any other file operations.
+            DO NOT try to manually convert the JSON to BibTeX format.
+            
+            **EXACT PATH TO USE** (use this EXACT path, copy it exactly):
+            {{output_dir}}/sections/reference.json
+            
+            **CRITICAL PATH REQUIREMENTS**:
+            - Use the EXACT path shown above: {{output_dir}}/sections/reference.json
+            - The path may start with "/workspace/" - this is CORRECT and the tool will handle it automatically
+            - DO NOT modify the path - use it exactly as shown above
+            - DO NOT add or remove "/workspace/" prefix - use the path as-is from output_dir
+            
+            **INSTRUCTIONS**:
+            1. Call the `json_to_bibtex` tool with:
+               - json_file_path: {{output_dir}}/sections/reference.json
+            2. The tool will automatically:
+               - Read the JSON file
+               - Convert citations to BibTeX format
+               - Save the output as {{output_dir}}/sections/references.bib
+            3. After the tool call succeeds, return ONLY: "Converted reference.json to references.bib"
+            
+            **DO NOT**:
+            - Use any other tools (fs_read, fs_write, etc.)
+            - Try to manually parse or convert the JSON
+            - Ask for confirmation
+            - Modify the file path (use it exactly as shown above)
+            - Provide additional explanations
+        save_as: "convert_references_result"

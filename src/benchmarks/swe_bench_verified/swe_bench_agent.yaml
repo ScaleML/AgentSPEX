@@ -1,0 +1,174 @@
+name: "swe_bench_agent"
+goal: "Debug a GitHub issue and fix the code"
+system_prompt: |
+    You are a helpful assistant that can interact multiple times with a computer shell to solve programming tasks.
+
+    STRICT FORMAT RULES:
+    - Your response must contain AT MOST one code block.
+    - If you include more than one code block, your response will be REJECTED.
+    - The code block must contain ONE command (or commands connected with && or ||).
+    - The code block must be either a bash block (raw shell command) or a subagent block (subagent name as the fence language).
+    - If you have nothing to execute, respond with plain text and NO code block.
+
+    Include a THOUGHT section before your command where you explain your reasoning process.
+    Format your response as shown in <format_example>.
+
+    <format_example>
+    THOUGHT: You should first consider the task goal, your current state, and plan for your future actions. Then tell the user whether you want to run a bash command or call a subagent to help with a task and explain in depth why or why not.
+
+    ```bash or subagent
+    your_command_here
+    ```
+    </format_example>
+
+    Use subagents when you need focused help with a specific task:
+    - reproduce_issue: Deploys a subagent that will create a minimal reproductions script from the issue text. Pass in the specific thing you want to test for in query. Do not try to use pytest. You can use this subagent to create a new minimal reproduction script.
+    - submit_changes: REQUIRED for submission. Reviews your changes and either approves (submits) or returns feedback if more work is needed. You MUST use this subagent to submit - direct submission commands are blocked.
+
+    Available subagents (inline calls only, must be the ONLY command in the code block):
+    - reproduce_issue(query=...)
+    - submit_changes(query=...)
+
+    ```reproduce_issue
+    query: "write a minimal repro script to target..."
+    ```
+
+    ```submit_changes
+    query: "Fixed the issue by changing X in file Y because Z"
+    ```
+
+config:
+    model: "claude-opus-4-6"
+    temperature: 1.0
+    model_kwargs:
+        reasoning_effort: "high"
+    enabled_tools: []
+    allow_inline_tools_without_enable: true
+    enable_inline_tool_calls: true
+    inline_tool_calls_only: false
+    stop_on_return: true
+    require_submodule_submit: true
+    swebench_mode: true
+    max_tool_calls_per_step: 150
+    enabled_submodules:
+        - "reproduce_issue"
+        - "submit_changes"
+    expose_submodules_as_tools: false
+
+submodules:
+    - name: "reproduce_issue"
+      path: "modules/reproduce_issue.yaml"
+    - name: "submit_changes"
+      path: "modules/submit_changes.yaml"
+
+parameters:
+    code_path: "${CODE_PATH:-/workspace/tmp/repo}"
+    problem_statement: "${PROBLEM_STATEMENT}"
+    regression_test_cmd: ""
+
+workflow:
+    # ── Task 1: Reproduce the issue ──────────────────────────────────
+    # Only reproduce_issue is available here. The agent explores the
+    # codebase and creates a minimal reproduction script before any
+    # fix attempt begins.
+    - step:
+        name: "reproduce"
+        enabled_submodules:
+            - "reproduce_issue"
+        instruction: |
+            <pr_description>
+
+            The repository is located at {{code_path}}
+
+            {{problem_statement}}
+
+            </pr_description>
+
+            <instructions>
+            # Task: Reproduce the Issue
+
+            ## Overview
+            You are a software engineer. Your goal in this step is to understand the reported issue
+            and create a minimal reproduction script. Do NOT attempt to fix the issue yet.
+
+            ## Workflow
+            1. **Analyze the codebase**
+               Explore the repository structure. Locate and read the relevant source files
+               mentioned or implied by the problem statement.
+
+            2. **Reproduce the issue**
+               Deploy the `reproduce_issue` subagent with a detailed query describing what to test:
+               ```reproduce_issue
+               query: "write a minimal repro script to target..."
+               ```
+               Provide relevant file paths and a comprehensive query.
+
+            3. **Verify reproduction**
+               Run the reproduction script yourself and confirm it demonstrates the bug
+               (prints FAIL or raises the expected error).
+
+            DO NOT use the provided pytest or local tests. Only use reproduction scripts that you create via the subagent.
+
+            ## When you are done
+            Once you have a working reproduction that clearly shows the bug, provide your
+            final summary as plain text with NO code block. Your response must contain:
+            - Which files / functions are involved
+            - How the reproduction script demonstrates the problem
+            - The script path and how to run it
+
+            IMPORTANT: Your final message must NOT include a code block. A code block will
+            be treated as another tool call and the step will not end. Just write plain text.
+            Do NOT attempt a fix in this step.
+            </instructions>
+        save_as: "reproduction_summary"
+
+    # ── Task 2: Fix and submit ───────────────────────────────────────
+    # Only submit_changes is available. The agent implements the fix
+    # using bash commands and submits via the submit_changes gate.
+    - step:
+        name: "fix_and_submit"
+        enabled_submodules:
+            - "submit_changes"
+        instruction: |
+            <instructions>
+            # Task: Fix the Issue and Submit
+
+            ## Overview
+            You already have the problem description and a working reproduction of the bug from
+            the previous step. Your goal is now to implement the fix, verify it, and submit.
+
+            ## Workflow
+            1. **Implement the fix**
+               Update the existing source code to resolve the issue.
+               Do NOT create new source files. The fix should only modify existing files.
+               The only new files you may create are small test/repro scripts to verify your fix.
+
+            2. **Verify the fix**
+               Re-run the reproduction script from the previous step to confirm it now prints PASS.
+               DO NOT use the provided pytest or local tests.
+
+            3. **Test edge cases**
+               Write and run additional small test scripts directly via bash to validate
+               robustness with boundary conditions.
+               DO NOT use the provided pytest or local tests.
+
+            4. **Review changes**
+               Inspect for correctness, clarity, and unintended side effects:
+               ```bash
+               git --no-pager diff
+               ```
+
+            ## Submission
+            When you've completed your work, you MUST submit via the submit_changes subagent.
+            Direct submission commands are blocked — you must use the subagent.
+
+            ```submit_changes
+            query: "Brief summary of what you changed and why"
+            ```
+
+            The submit_changes subagent will review your diff and either:
+            - **Approve**: Your work is submitted automatically. You cannot continue after this.
+            - **Reject with feedback**: You will receive specific feedback about what needs more work.
+              Read the feedback carefully and continue fixing the issues, then try submitting again.
+            </instructions>
+        save_as: "final_summary"

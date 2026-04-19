@@ -1,0 +1,190 @@
+name: "review_and_exit_module"
+goal: "Compile PDF, run review API, check all exit conditions (format + score), return STOP/CONTINUE with failing criteria."
+
+config:
+    model: "gpt-5.2"
+    max_tokens_per_step: 200000
+    max_tool_calls_per_step: 20
+    plan_revision_max_steps: 0
+
+parameters:
+    sections_dir: "${SECTIONS_DIR}"
+    output_dir: "${OUTPUT_DIR}"
+    current_n: "${CURRENT_N}"
+    primearxiv_sty: "${PRIMEARXIV_STY:-/workspace/PRIMEarxiv.sty}"
+    min_score: "${MIN_SCORE:-5.6}"
+
+workflow:
+  # ── Step 1: Compile PDF ───────────────────────────────────────────────
+  - step:
+      name: "compile_pdf_step"
+      instruction: |
+        N = {{current_n}}
+
+        Use the compile_pdf tool:
+        compile_pdf sections_dir="{{sections_dir}}" output_pdf="{{output_dir}}/iterations/N/proposal.pdf" primearxiv_sty="{{primearxiv_sty}}"
+
+        If compilation fails, try without sty:
+        compile_pdf sections_dir="{{sections_dir}}" output_pdf="{{output_dir}}/iterations/N/proposal.pdf" primearxiv_sty=""
+
+        If still fails:
+          Return "COMPILE_FAILED"
+
+        shell_run: cp {{output_dir}}/iterations/N/proposal.pdf {{output_dir}}/current.pdf
+        Return "PDF_READY"
+      save_as: "compile_result"
+
+  # ── Step 2: Run review API ────────────────────────────────────────────
+  - step:
+      name: "run_review"
+      instruction: |
+        N = {{current_n}}
+
+        If {{compile_result}} is "COMPILE_FAILED":
+          fs_write {{output_dir}}/iterations/N/review_exit.json: {"compile_failed": true}
+          Return "COMPILE_FAILED"
+
+        Use the review_paper tool:
+        review_paper pdf_path="{{output_dir}}/current.pdf" output_json="{{output_dir}}/iterations/N/review.json"
+
+        Copy review to stable location:
+        shell_run: cp {{output_dir}}/iterations/N/review.json {{output_dir}}/tmp/latest_review.json
+
+        The tool returns the score in result.score.adjusted_expected_rating (preferred) or result.score.expected_rating (fallback if adjusted is null).
+        Save the score:
+        fs_write {{output_dir}}/iterations/N/score.txt: <the score>
+
+        Return ONLY the numeric score (e.g. "5.1234").
+      save_as: "review_score"
+
+  # ── Step 3: Format checks ──────────────────────────────────────────
+  - step:
+      name: "format_checks"
+      instruction: |
+        Use the check_format tool:
+        check_format sections_dir="{{sections_dir}}"
+
+        The tool returns a JSON object in result.results. Save it for the next step.
+        Return the COMPLETE results JSON exactly as returned, no modifications.
+      save_as: "format_json"
+
+  # ── Step 4: Content checks (LLM) + exit decision ─────────────────────
+  - step:
+      name: "evaluate_and_decide"
+      instruction: |
+        You are evaluating whether a paper meets all quality criteria.
+
+        ## Review score
+        Score from review API: {{review_score}}
+        Minimum required score: {{min_score}}
+
+        If {{review_score}} is "COMPILE_FAILED", set score_ok = false and review_score = 0.
+
+        ## Format check results
+        {{format_json}}
+
+        ## Content checks (you must perform these by reading the paper)
+
+        **Check 1: Contribution clarity**
+        Use fs_read to read {{sections_dir}}/introduction.tex
+        Does the introduction END with a clear, prominent statement of 2-4 core contributions
+        that a reviewer can immediately understand? (bullet list, numbered list, or well-structured
+        paragraph — any format is fine as long as contributions are easy to identify)
+        Set contribution_clear = true or false.
+
+        **Check 2: Key points emphasized**
+        Based on the introduction you just read, are the paper's key selling points
+        (what problem it solves, why the approach is novel, what benefit it provides)
+        clearly emphasized and easy to grasp within the first 2 paragraphs?
+        Set emphasis_ok = true or false.
+
+        ## Compute total score
+
+        IMPORTANT: Do NOT use any "automated_pass_count" or "format_pass_count" value
+        from the format_json. You MUST compute format_pass_count yourself by summing
+        these 11 boolean values (each true=1, false=0):
+
+        From format_json (9 automated checks):
+        - title_ok
+        - abstract_single_paragraph
+        - subsections_ok
+        - references_ok
+        - abc_ok
+        - equations_centered
+        - abstract_no_citations
+        - no_orphan_citations
+        - has_figure
+
+        From your LLM checks above (2 checks):
+        - contribution_clear
+        - emphasis_ok
+
+        format_pass_count = (title_ok + abstract_single_paragraph + subsections_ok +
+                            references_ok + abc_ok + equations_centered +
+                            abstract_no_citations + no_orphan_citations +
+                            has_figure +
+                            contribution_clear + emphasis_ok)
+
+        This must be a number from 0 to 11. Do NOT copy any precomputed count from the JSON.
+
+        all_format_pass = (format_pass_count == 11)
+        score_ok = (float(review_score) >= float({{min_score}}))
+
+        Compute total_score:
+        total_score = format_pass_count * 10 + float(review_score)
+
+        This formula ensures format improvements (worth 10 points each) always
+        dominate over review score changes (typically 0-10 range).
+        Example: 8 format checks pass + review 5.3 → total = 85.3
+
+        ## Build failing criteria list
+
+        Build a list of ALL failing criteria. For each failed check, write a one-line
+        description that get_suggestion.yaml can act on. Examples:
+        - "TITLE_TOO_LONG: title has 13 words, must be ≤10"
+        - "TOO_MANY_SUBSECTIONS: experimental_setup.tex has 10 subsections, max is 5"
+        - "REFERENCES_TOO_FEW: only 5 references, need ≥20"
+        - "NO_CONTRIBUTION_LIST: introduction does not end with clear contribution statement"
+        - "ABSTRACT_HAS_CITATIONS: abstract contains \\cite{} commands — remove all citations from abstract"
+        - "ORPHAN_CITATIONS: keys [Song_2025] cited in .tex but missing from references.bib — remove these \\cite{} or add entries to .bib"
+        - "NO_FIGURE: paper has no figure (handled by add_figure module, not by suggestions)"
+        - "SCORE_TOO_LOW: review score is 5.26, need ≥6.0"
+
+        ## Decision
+
+        STOP if: all_format_pass == true AND score_ok == true
+        CONTINUE otherwise.
+
+        ## Save total score to iteration directory
+
+        Overwrite the iteration's score.txt with the total_score (not just review_score):
+        fs_write {{output_dir}}/iterations/{{current_n}}/score.txt: <total_score>
+
+        ## Output format
+
+        Return a JSON object (and ONLY this JSON, no other text):
+        {
+          "decision": "STOP" or "CONTINUE",
+          "review_score": <float>,
+          "total_score": <float>,
+          "format_pass_count": <int out of 11>,
+          "all_format_pass": <bool>,
+          "score_ok": <bool>,
+          "failing_criteria": ["...", "..."],
+          "details": {
+            "title_ok": <bool>,
+            "abstract_single_paragraph": <bool>,
+            "subsections_ok": <bool>,
+            "references_ok": <bool>,
+            "abc_ok": <bool>,
+            "equations_centered": <bool>,
+            "abstract_no_citations": <bool>,
+            "no_orphan_citations": <bool>,
+            "has_figure": <bool>,
+            "contribution_clear": <bool>,
+            "emphasis_ok": <bool>
+          }
+        }
+      save_as: "exit_result"
+
+  - return: "exit_result"

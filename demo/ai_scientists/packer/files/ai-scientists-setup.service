@@ -1,0 +1,20 @@
+[Unit]
+Description=AI Scientists First-Boot Setup Portal
+After=network-online.target
+Wants=network-online.target
+
+# Only run if setup has NOT been completed yet
+ConditionPathExists=!/home/aiscientist/.setup-complete
+
+[Service]
+Type=simple
+User=aiscientist
+Environment="PATH=/home/aiscientist/miniconda3/envs/yaml_agent/bin:/home/aiscientist/miniconda3/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="HOME=/home/aiscientist"
+ExecStart=/home/aiscientist/miniconda3/envs/yaml_agent/bin/python /home/aiscientist/setup-portal/setup_server.py
+
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

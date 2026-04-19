@@ -1,0 +1,122 @@
+name: "get_suggestion_module"
+goal: "Model A: read review feedback, failing format criteria, and all LaTeX sections, then output high-level improvement suggestions per section."
+
+config:
+    model: "gpt-5.2"
+    max_tokens_per_step: 200000
+    max_tool_calls_per_step: 20
+    plan_revision_max_steps: 0
+
+parameters:
+    sections_dir: "${SECTIONS_DIR}"
+    review_json: "${REVIEW_JSON}"         # path to the review JSON (contains strengths, weaknesses, etc.)
+    suggestions_dir: "${SUGGESTIONS_DIR}" # directory to write per-section suggestion files
+    failing_criteria: "${FAILING_CRITERIA:-none}"  # JSON array of failing format/content criteria
+
+workflow:
+  - step:
+      name: "generate_suggestions"
+      instruction: |
+        You are an expert scientific paper reviewer and editor. Your task is to read the
+        review feedback, failing format criteria, and all LaTeX sections, then produce
+        high-level improvement suggestions.
+
+        **Step 1: Read review feedback**
+        Use fs_read to read: {{review_json}}
+        Pay close attention to:
+        - "Weaknesses": these are the problems to fix (fixing weaknesses raises the score)
+        - "Strengths": these must be PRESERVED (do not weaken or remove anything praised here)
+        - "Novelty", "Significance", "Soundness": note any low ratings
+
+        **Step 2: Read failing format criteria**
+        These are FORMAT REQUIREMENTS that the paper currently fails. They have HIGHER
+        PRIORITY than reviewer weaknesses — fix these FIRST:
+
+        {{failing_criteria}}
+
+        If this is "none" or empty, skip to Step 3.
+
+        Format criteria examples and how to address them:
+        - TITLE_TOO_LONG: shorten \title{...} in main.tex to ≤10 words
+        - TITLE_TOO_SHORT: expand title to ≥4 words
+        - ABSTRACT_MULTI_PARAGRAPH: merge abstract into a single paragraph
+        - TOO_MANY_SUBSECTIONS: merge or remove subsections (suggest which ones to combine)
+        - ABC_PATTERN: rewrite related_work.tex to remove (a)(b)(c) enumeration style
+        - EQUATIONS_NOT_CENTERED: replace \begin{align} (which uses & alignment, not centering)
+          and $$ with \begin{equation} (single equation) or \begin{gather} (multiple equations).
+          For multi-condition expressions, put them on one line or use \begin{gather}.
+        - NO_CONTRIBUTION_LIST: add clear 2-4 contribution statement at end of introduction
+        - WEAK_EMPHASIS: strengthen the key selling points in intro's first 2 paragraphs
+        - ABSTRACT_HAS_CITATIONS: remove ALL \cite{} commands from abstract.tex (abstracts must not cite)
+        - ORPHAN_CITATIONS: remove \cite{key} where key does not exist in references.bib
+
+        **Step 3: Read all LaTeX sections**
+        Use fs_read to read these files from {{sections_dir}}/ (skip any that don't exist):
+          abstract.tex, introduction.tex, method.tex, experimental_setup.tex, related_work.tex
+
+        If any failing criteria mention main.tex (e.g., title issues), also read:
+          {{sections_dir}}/main.tex
+
+        **Step 4: Analyze and generate suggestions**
+        For each section that needs improvement, write a high-level suggestion.
+
+        PRIORITY ORDER:
+        1. Fix FAILING FORMAT CRITERIA — these are hard requirements, must be fixed first
+        2. Fix ADDRESSABLE reviewer weaknesses — rewrite text to address concerns
+        3. Make contributions CRYSTAL CLEAR in the introduction (2-4 key contributions
+           at the end, each stating WHAT is proposed AND WHY it matters).
+           IMPORTANT: the contribution list in the introduction must NOT contain any
+           math formulas or LaTeX math notation (no $...$, no ^, no subscripts).
+           Use plain English descriptions instead of symbols. For example, write
+           "a bounded repair budget" instead of "$B^{\text{repair}}$".
+        4. Strengthen novelty/significance/soundness framing
+        5. Improve logical flow and coherence between sections
+        6. Improve clarity and conciseness
+
+        CRITICAL — This paper is a PROPOSAL (no experiments have been run yet).
+        Therefore some reviewer weaknesses CANNOT be fixed by editing text:
+        - "Lack of code/open-source release" → IGNORE (proposals don't have code)
+        - "No empirical results / experiments needed" → IGNORE (this is a proposal)
+        - "Need more baselines / datasets" → IGNORE (cannot add experiments)
+        - "Hyperparameter details missing" → IGNORE unless about the proposed method design
+        - "Reproducibility concerns about implementation" → IGNORE (no implementation yet)
+        Only address weaknesses fixable by REWRITING EXISTING TEXT.
+
+        LENGTH GUIDELINE:
+        - Suggestions should aim to KEEP or REDUCE section length where possible.
+        - Avoid suggesting adding new paragraphs, new subsections, or large content blocks.
+        - Preferred operations: rephrase, restructure, condense, merge, clarify.
+        - EXCEPTION: if a failing format criterion requires structural change (e.g.,
+          adding a contribution list), that takes priority over length.
+        - If a weakness requires adding substantial new content to fix, SKIP it.
+
+        Rules for suggestions:
+        - Be HIGH-LEVEL: suggest directions, not specific sentence rewrites
+        - Focus on WHAT to improve and WHY, let Model B decide HOW
+        - Each suggestion should be 2-5 sentences
+        - Do NOT suggest changes that would contradict the paper's methodology
+        - Do NOT fabricate claims (e.g. don't claim code will be released)
+        - Do NOT suggest adding new citations or references — citation management is
+          handled by a separate module. Your suggestions must NEVER include adding \cite{}.
+        - Do NOT suggest adding figures, images, or \includegraphics — figure generation
+          is handled by a separate module. NEVER suggest inserting \begin{figure} blocks.
+        - NEVER suggest removing content identified as a strength
+        - Only suggest changes for sections that genuinely need improvement
+        - For FORMAT fixes: be specific about what needs to change
+        - For REVIEWER fixes: prefer changes to FEWER sections (1-3)
+
+        **Step 5: Write suggestion files**
+        For each section that needs a suggestion, use fs_write to create a file:
+          {{suggestions_dir}}/<section_name>.txt
+
+        where <section_name> is one of: abstract, introduction, method, experimental_setup,
+        related_work, main (main.tex for title/preamble changes)
+
+        Each file should contain ONLY the suggestion text (plain text, no quotes, no prefix).
+
+        Do NOT create suggestion files for sections that don't need changes.
+
+        Return "SUGGESTIONS_SAVED" when done, or "NO_SUGGESTIONS" if the paper needs no changes.
+      save_as: "suggestion_result"
+
+  - return: "suggestion_result"

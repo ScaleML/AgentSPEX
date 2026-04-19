@@ -1,0 +1,119 @@
+name: "add_references_module"
+goal: "Add references from the citation pool to the paper's .bib and .tex files until the minimum count is reached."
+
+config:
+    model: "gpt-5.2"
+    max_tokens_per_step: 200000
+    max_tool_calls_per_step: 20
+    plan_revision_max_steps: 0
+
+parameters:
+    sections_dir: "${SECTIONS_DIR}"
+    citation_pool_path: "${CITATION_POOL_PATH}"
+    min_refs: "${MIN_REFS:-20}"
+
+workflow:
+  - step:
+      name: "add_refs"
+      instruction: |
+        You are a LaTeX citation editor. Your job is to add references from a pre-searched
+        citation pool into the paper until it has at least {{min_refs}} references.
+
+        **Step 1: Check current state**
+        fs_read {{sections_dir}}/references.bib
+        Extract all BibTeX keys from references.bib.
+
+        Then count how many of those keys are actually \cite'd in .tex files:
+        shell_run: python3 -c "
+        import re, os
+        d='{{sections_dir}}'
+        bib=set(m.group(1) for m in re.finditer(r'@\w+\{([^,\s]+)', open(os.path.join(d,'references.bib')).read()))
+        cited=set()
+        for f in os.listdir(d):
+            if f.endswith('.tex'):
+                for m in re.findall(r'\\\\cite\{([^}]+)\}', open(os.path.join(d,f)).read()):
+                    for k in m.split(','):
+                        cited.add(k.strip())
+        eff=bib&cited; uncited=bib-cited
+        print(f'BIB={len(bib)} CITED={len(cited)} EFFECTIVE={len(eff)}')
+        if uncited: print(f'UNCITED={list(uncited)}')
+        "
+
+        The EFFECTIVE count (keys in both bib AND \cite'd in .tex) is what matters.
+        Uncited bib entries do NOT appear in the compiled PDF.
+
+        If EFFECTIVE >= {{min_refs}}, return "SKIPPED: already has N effective references".
+        If EFFECTIVE < {{min_refs}} but there are UNCITED bib keys, you must insert
+        \cite{} for those uncited keys in .tex files FIRST (Step 6), then add more
+        from pool if still needed.
+
+        **Step 2: Read citation pool**
+        fs_read {{citation_pool_path}}
+        This is a JSON array of citation objects, each with: bibtex, title, abstract, url.
+
+        If the pool is empty, the file doesn't exist, or all pool entries are already in .bib
+        (by matching title, first 40 characters case-insensitive), return "SKIPPED: no new citations available".
+
+        CRITICAL: You may ONLY add citations that exist in the citation pool.
+        NEVER fabricate, invent, or guess citation entries. If the pool has no usable
+        new citations, return SKIPPED — adding nothing is better than adding fake references.
+
+        **Step 3: Read all section files to understand content**
+        fs_read {{sections_dir}}/abstract.tex
+        fs_read {{sections_dir}}/introduction.tex
+        fs_read {{sections_dir}}/method.tex
+        fs_read {{sections_dir}}/experimental_setup.tex
+        fs_read {{sections_dir}}/related_work.tex
+
+        **Step 4: Select citations to add**
+        Calculate how many more references are needed:
+        NEED = {{min_refs}} - EFFECTIVE (from Step 1, NOT bib entry count).
+        This accounts for uncited bib entries that won't appear in the PDF.
+        Select the NEED most relevant citations from the pool based on content match.
+        If there are UNCITED bib keys from Step 1, prioritize inserting \cite{} for
+        those first — they are already in .bib and just need a \cite{} in a .tex file.
+
+        For each selected citation:
+        - Determine which section(s) it is most relevant to
+        - Identify a specific sentence or context where a \cite{key} would be natural
+
+        **Step 5: Update references.bib**
+        Append the selected BibTeX entries to the END of references.bib.
+        Use fs_write to write the COMPLETE updated references.bib (existing + new entries).
+
+        IMPORTANT:
+        - Preserve ALL existing entries exactly as they are
+        - Add new entries after existing ones, separated by blank lines
+        - Each entry must have a valid, unique key in LastName_Year format
+
+        **Step 6: Insert citations in .tex files**
+
+        CRITICAL: Every new BibTeX entry added to references.bib MUST be cited
+        with \cite{key} in at least one .tex file. If a bib entry is not \cite'd
+        anywhere, LaTeX will NOT include it in the compiled reference list.
+        Do NOT add a bib entry without also inserting its \cite{key} somewhere.
+
+        For each section file that needs new citations:
+        - NEVER modify abstract.tex — abstracts must not contain any \cite{} commands
+        - Read the current content (already read in Step 3)
+        - Insert \cite{key} at natural positions in existing sentences
+        - Do NOT add new sentences just to cite papers
+        - Prefer inserting near related concepts or at the end of relevant claims
+        - Use \cite{key1, key2} if multiple citations support the same point
+        - If you cannot find a natural place for a citation, put it in related_work.tex
+          at the end of the most relevant paragraph
+
+        Write ONLY the modified .tex files using fs_write.
+        Do NOT modify files that don't need new citations.
+
+        Strict LaTeX rules:
+        - Keep ALL apostrophes: model's, agent's, dataset's
+        - Never use bare % — always \%
+        - Never use double braces {{ or }}
+        - Preserve all existing \cite{}, \label{}, environments exactly
+
+        **Step 7: Return result**
+        Return "ADDED: N new references (total now M)" where N is added count and M is new total.
+      save_as: "add_result"
+
+  - return: "add_result"

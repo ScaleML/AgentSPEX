@@ -1,0 +1,66 @@
+name: "apply_suggestion_module"
+goal: "Model B: apply one high-level editing suggestion to a single LaTeX section file."
+
+config:
+    model: "gpt-5.2"
+    max_tokens_per_step: 200000
+    max_tool_calls_per_step: 10
+    plan_revision_max_steps: 0
+
+parameters:
+    target_file_path: "${TARGET_FILE_PATH}" # full path to the .tex file to edit
+    suggestion_file: "${SUGGESTION_FILE}"   # path to the suggestion text file for this section
+
+workflow:
+  - step:
+      name: "apply_edit"
+      instruction: |
+        You are a LaTeX editor. Your job is to apply a high-level editing suggestion to a
+        LaTeX section file. The suggestion describes WHAT to improve and WHY — you decide HOW.
+
+        FIRST: Check if the suggestion file exists.
+        Use fs_read to attempt reading: {{suggestion_file}}
+        If the file does NOT exist or is empty, return "SKIPPED" immediately — do nothing else.
+
+        1. The suggestion file content is the improvement direction you must follow.
+
+        2. Use fs_read to read the LaTeX file: {{target_file_path}}
+           This is the ONLY content you should modify.
+
+        3. Apply changes that address the suggestion. You have editorial freedom in HOW to
+           implement the suggestion, but:
+           - Stay faithful to the suggestion's intent
+           - Do NOT add fabricated results, citations, or claims
+           - Do NOT add any new \cite{} commands — only keep existing ones.
+             You may REMOVE orphan \cite{key} if the key does not exist in references.bib,
+             but NEVER invent or add new citation keys.
+           - Do NOT add new paragraphs or new subsections — only rephrase/restructure existing text
+           - Do NOT add any \begin{figure}, \includegraphics, or image-related LaTeX commands.
+             Figures are handled by a separate module — never insert figures yourself.
+           - LENGTH GUIDELINE: try to keep the modified file close to the original length
+             (ideally within ±10%). Prefer making the text slightly SHORTER, not longer.
+             Do not add large blocks of new text — improve through rephrasing, not expansion.
+           - Achieve improvements by: rephrasing for clarity, reordering sentences for better flow,
+             merging redundant sentences, strengthening word choices, or tightening loose phrasing
+           - Do NOT fabricate promises (e.g. "we will release code") that aren't in the original
+
+        4. Use fs_write to overwrite {{target_file_path}} with the complete modified content.
+
+        Strict LaTeX rules (violations cause compilation failure):
+        - Keep ALL apostrophes: model's, agent's, dataset's — never remove them
+        - Never use bare % — always escape as \%
+        - Never use double braces {{ or }} — use single { and }
+        - Never mix Markdown and LaTeX (**bold** is wrong; use \textbf{})
+        - Preserve all \cite{}, \label{}, etc. exactly
+        - Equations MUST be centered: use \begin{equation} (single) or \begin{gather} (multiple).
+          Do NOT use \begin{align} with & alignment markers — that is left-aligned, not centered.
+          Do NOT use $$...$$ — use \begin{equation} instead.
+        - In introduction.tex: do NOT use any math formulas or LaTeX math notation
+          (no $...$, no ^, no subscripts, no \mathsf{}, no \textsc{}).
+          Use plain English instead of symbols. Write "a bounded repair budget"
+          not "$B^{\text{repair}}$".
+
+        Return "OK" if the edit was applied, or "FAILED: <reason>" if it could not be done.
+      save_as: "apply_result"
+
+  - return: "apply_result"

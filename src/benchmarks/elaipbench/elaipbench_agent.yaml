@@ -1,0 +1,201 @@
+name: elaipbench_agent
+goal: "Answer an academic paper question based on the provided passage"
+system_prompt: |
+  You are an expert academic researcher skilled at reading and understanding scientific papers. You answer questions about academic papers by carefully analyzing the provided passage. Be precise and select only the answer(s) that are supported by the passage.
+config:
+  model: "gpt-5"
+  temperature: 1.0
+  model_kwargs:
+      reasoning_effort: "high"
+  max_tokens: 4000
+  enabled_tools: []
+
+parameters:
+  question: ""
+  paper_content: ""
+  question_type_instruction: ""
+  question_type: ""
+
+workflow:
+  - task:
+      name: skim_paper_structure
+      instruction: |
+        Read the paper and Identify: 
+        1. The paper title
+        2. The abstract (or summary paragraph)
+        3. The main section headings
+
+        Paper:
+        {{paper_content}}
+
+        Return JSON:
+        {
+          "title": "",
+          "abstract_summary": "",
+          "section_headings": []
+        }
+      save_as: paper_structure
+
+  - task:
+      name: analyze_question
+      instruction: |
+        Use the paper overview to understand the question.
+        Paper overview:
+        {{paper_structure}}
+
+        Analyze the question stem to determine what information must be found in the paper.
+        Question:
+        {{question}}
+        {{question_type_instruction}}
+        Focus **ONLY** on the question stem. Do **NOT** evaluate or reason about the answer options yet.
+
+        If the question contains negation words (e.g., "NOT", "incorrect", "wrong", "false"), note this EXPLICITLY in your analysis.
+        Identify:
+        1. Key terms to search in the paper
+        2. The EXACT focus of the question — what specific type of information is being asked for
+
+        Return JSON in the format:
+
+        {
+          "keywords": [],
+          "core_claim": "",
+          "question_stem": "",
+          "question_type": "Single-answer or Multiple-answer"
+        }
+      save_as: question_analysis
+  - task:
+      name: extract_evidence
+      instruction: |
+        ## Context
+        Question analysis: {{question_analysis}}
+        Paper: {{paper_content}}
+
+        ## Task
+        Locate the most relevant evidence in the paper to answer the question.
+        Use the keywords and claim from the question analysis to search
+        for relevant paragraphs in the paper.
+        Extract up to 5 evidence snippets that are most relevant to the claim.
+
+        ### Rules
+        - Return at most 5 snippets.
+        - If fewer than 5 strong pieces of evidence exist, return only those.
+        - Each snippet must be a paragraph copied directly from the paper.
+        - The snippet must clearly relate to the claim identified in the question analysis.
+        - Do not include weak or irrelevant snippets just to reach five.
+        - Do **NOT** paraphrase or invent evidence; only extract text that appears **VERBATIM** in the paper.
+
+        Return JSON in the format:
+
+        {
+          "evidence_snippets": [
+            {
+              "text": "...",
+              "reason": "why this snippet is relevant"
+            }
+          ]
+        }
+      save_as: evidence
+  - task:
+      name: evaluate_options
+      instruction: |
+        Evaluate each answer option using the evidence.
+        Question:{{question}}
+        Question analysis:{{question_analysis}}
+        Evidence:{{evidence}}
+
+        Evaluate each option as an INDEPENDENT judgment. Your verdict on one option must NOT influence your verdict on any other option.
+
+        The question analysis identified this as: {{question_analysis.question_type}}.
+        - If Single-answer: exactly ONE option should be "supported".
+        - If Multiple-answer: typically 2-3 options should be "supported".
+
+        For each option, determine:
+        1. whether it is supported, contradicted, or not established by the evidence
+        2. why it is correct or incorrect
+        3. which part of the evidence is most relevant
+
+        Return JSON in the format:
+        {
+          "A": {
+            "verdict": "supported / contradicted / not_established",
+            "reason": "",
+            "evidence_text": ""
+          },
+          "B": {
+            "verdict": "supported / contradicted / not_established",
+            "reason": "",
+            "evidence_text": ""
+          },
+          "C": {
+            "verdict": "supported / contradicted / not_established",
+            "reason": "",
+            "evidence_text": ""
+          },
+          "D": {
+            "verdict": "supported / contradicted / not_established",
+            "reason": "",
+            "evidence_text": ""
+          },
+          "selected_options": ["list of option letters with verdict 'supported'"],
+          "selected_count": 0
+        }
+        Rules:
+        - "supported" means the option is justified by the evidence, whether directly stated, paraphrased, or reasonably inferred.
+        - "contradicted" means the evidence directly goes against the option.
+        - "not_established" means the evidence is insufficient to support the option.
+        - Do not guess beyond the evidence.
+      save_as: option_judgment
+
+  - if:
+      condition: "question_type == 'MA-MCQ'"
+      then:
+        - set_variable:
+            name: recheck_count
+            value: 0
+
+        - while:
+            condition: "option_judgment.selected_count < 2 and recheck_count < 2"
+            max_iterations: 2
+            steps:
+              - task:
+                  name: recheck_options
+                  instruction: |
+                    This is a multiple-answer question (typically 2-3 correct), but only {{option_judgment.selected_count}} option(s) selected so far.
+                    Question:{{question}}
+                    Current evaluation: {{option_judgment}}
+                    Evidence: {{evidence}}
+
+                    Reconsider ALL non-selected options with a more lenient standard.
+                    **You MUST select at least 2 options.**
+
+                    Return JSON in the same format as the original evaluation:
+                    {
+                      "A": {"verdict": "supported / contradicted / not_established", "reason": "", "evidence_text": ""},
+                      "B": {"verdict": "...", "reason": "", "evidence_text": ""},
+                      "C": {"verdict": "...", "reason": "", "evidence_text": ""},
+                      "D": {"verdict": "...", "reason": "", "evidence_text": ""},
+                      "selected_options": [],
+                      "selected_count": 0
+                    }
+                  save_as: option_judgment
+
+              - increment: recheck_count
+
+        - task:
+            name: finalize_multi_answer
+            instruction: |
+              Based on the option evaluation below, select the correct answer.
+              Question: {{question}}
+              Option evaluation: {{option_judgment}}
+              {{question_type_instruction}}
+            save_as: final_response
+
+      else:
+        - task:
+            name: finalize_single_answer
+            instruction: |
+              Based on the option evaluation below, select the ONE correct answer.
+              Option evaluation:{{option_judgment}}
+              Question:{{question}}
+              {{question_type_instruction}}
+            save_as: final_response

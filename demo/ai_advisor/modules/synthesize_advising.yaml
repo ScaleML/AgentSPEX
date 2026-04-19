@@ -1,0 +1,100 @@
+name: "synthesize_and_evaluate_advising"
+goal: "Compare target vs related work, synthesize a full academic advising report"
+
+parameters:
+  topic: "${TOPIC}"
+  results_dir: "${RESULTS_DIR}"
+  target_summary: "${TARGET_SUMMARY}"
+  comparison_file: "${COMPARISON_FILE}"
+
+workflow:
+  # =========================================================
+  # STEP 1: LOAD COMPARISON DATA
+  # =========================================================
+  - task:
+      name: "load_comparison_data"
+      instruction: |
+        Read the comparison file that contains all paper-to-paper comparisons:
+        comparisons = fs_read("{{comparison_file}}")
+        
+        Return the content you just read.
+      save_as: "comparisons"
+
+  # =========================================================
+  # STEP 2: GENERATE ADVISING
+  # =========================================================
+  - task:
+      name: "generate_advising"
+      instruction: |
+        You are a professional idea evaluator with expertise in machine learning.
+        Your task is to evaluate a given target academic idea step by step, with a focus on novelty, contribution and soundness.
+        You will be given:  
+        1. The target idea's title, abstract, claimed contribution and section summaries.
+        2. A set of comparisons between the target paper and related works.
+        
+        **Advising Guidelines**
+        Read the given idea's content: It's important to carefully read through the given content, and to look up any related work and citations that will help you comprehensively evaluate it. Be sure to give yourself sufficient time for this step.
+        
+        **Evaluation Criteria**
+        1. Motivation / Objective: What is the goal of the paper? Is it to better address a known application or problem, draw attention to a new application or problem, or to introduce and/or explain a new theoretical finding? A combination of these? Different objectives will require different considerations as to potential value and impact. Is the approach well motivated, including being well-placed in the literature?
+        2. Novelty & Originality: Are the tasks or methods new? Is the work a novel combination of well-known techniques? (This can be valuable!) Is it clear how this work differs from previous contributions?
+        3. Significance & Contribution: Are the questions being asked important? Does the submission address a difficult task in a better way than previous work? Would researchers or practitioners likely adopt or build on these ideas?
+        4. Soundness: Can the proposed method and experiment setup properly substantiate the claimed contributions? Will the claims be well supported under the proposed experiment setup? Are the methods used appropriate? Is this a complete piece of work or work in progress?
+        
+        **Using Comparison Data**
+        The comparisons contain analyses of how the target paper relates to each related work, covering:
+        - Methodological differences
+        - Unique contributions of each paper
+        - Potential synergies or complementary aspects
+        - Key distinctions in focus or application
+        
+        Use these comparisons to inform your evaluation of novelty and significance.
+        
+        **Criticality**
+        Noting the idea will become a paper submitted to top conferences with acceptance rate of 30%, you should be more critical. Feel free to give negative feedback if the idea's quality is poor.
+        For empirical works, there is no need to contain theoretical analysis. For theoretical works, there is no need to contain experimental. Do not give negative feedback for the two cases.
+        
+        Here is the target idea's title, abstract, contribution and method&experiments overview:
+        {{target_summary}}
+        
+        Here are the comparisons with related works:
+        {{comparisons}}
+        
+        **Output Format**
+        Write the advising report in Markdown format with EXACTLY these sections in this order:
+        
+        # Summary
+        (Brief summary of the paper's main idea and contributions)
+        
+        # Comparison with Previous Works
+        (Synthesize the comparisons to highlight how this work relates to the field, you need to contain the comparisons with all related works)
+        
+        # Novelty
+        (Evaluate the novelty and originality based on the comparison with related works)
+        
+        # Significance
+        (Assess the importance and potential impact of the work)
+        
+        # Soundness
+        (Evaluate the technical soundness and whether the methods can support the claims)
+        
+        # Strengths
+        (List the main strengths of the paper)
+        
+        # Weaknesses
+        (List the main weaknesses and concerns)
+        
+        # Overall Evaluation
+        (Provide an overall assessment and recommendation)
+        
+        Now write the advising report following this exact format and save it to:
+        fs_write("{{results_dir}}/advising.md", <MARKDOWN_CONTENT>)
+        
+        Return ONLY the file path:
+        {{results_dir}}/advising.md
+      save_as: "advising_file"
+
+  # =========================================================
+  # FINAL OUTPUT
+  # =========================================================
+  - return: "advising_file"

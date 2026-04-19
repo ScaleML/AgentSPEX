@@ -1,0 +1,28 @@
+#cloud-config
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+  identity:
+    hostname: ai-scientists
+    username: aiscientist
+    # password hash for "aiscientist" (mkpasswd --method=SHA-512)
+    password: "$6$rounds=4096$randomsalt$yjZ6GZuPMBVLgYm2FRmGEfVJHCHn3W5XBHV0s2sKbMCM8E5RzQDqFpGmjYvYq7NrqOKzUHrM5cS1WNXV.Uw0"
+  ssh:
+    install-server: true
+    allow-pw: true
+  storage:
+    layout:
+      name: lvm
+      sizing-policy: all
+  packages:
+    - openssh-server
+    - open-vm-tools
+  late-commands:
+    # Enable password auth for SSH (needed for Packer)
+    - sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /target/etc/ssh/sshd_config
+    - sed -i 's/^#*KbdInteractiveAuthentication.*/KbdInteractiveAuthentication yes/' /target/etc/ssh/sshd_config
+    # Give aiscientist passwordless sudo
+    - echo 'aiscientist ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/aiscientist
+    - chmod 440 /target/etc/sudoers.d/aiscientist

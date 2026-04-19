@@ -1,0 +1,59 @@
+name: "search_citations_module"
+goal: "Search for academic papers using FireCrawl and format as citations"
+
+parameters:
+    query: "${QUERY}"
+    max_papers: "${MAX_PAPERS:-5}"
+
+workflow:
+    # ========================================
+    # Step 1: Search for Papers using FireCrawl
+    # ========================================
+    - task:
+        name: "search_papers"
+        instruction: |
+            Use firecrawl_search to search for academic papers.
+
+            Query: {{query}}
+            Number of results: {{max_papers}}
+
+            The tool will download content and save as markdown files.
+            ONLY return the tool call output, no extra commentary.
+        save_as: "search_results"
+
+    # ========================================
+    # Step 4: Prepare parameters for parallel citation extraction
+    # ========================================
+    - task:
+        name: "prepare_extraction_params"
+        instruction: |
+            For each url and file path in: {{search_results}}
+
+            Create a list of parameter dictionaries for parallel processing:
+            [
+                {
+                    "url": "[url]"
+                    "file_path": "[path]",
+                },
+                ...
+            ]
+
+            Return ONLY a JSON array with no extra commentary.
+
+            If search_results is empty, return an empty array: []
+        save_as: "extraction_params"
+
+    # ========================================
+    # Step 5: PARALLEL - Extract citation from each file
+    # ========================================
+    - parallel:
+        module: "./extract_single_citation.yaml"
+        parameters_list: "extraction_params"
+        save_results_as: "all_citations"
+        max_workers: 2
+    
+    - set_variable:
+        name: "formatted_citations"
+        value: "list( {{all_citations}}.values() )"
+
+    - return: "formatted_citations"

@@ -1,0 +1,93 @@
+name: "search_related_papers"
+goal: "Search arXiv for papers related to a target paper using firecrawl with multiple queries."
+
+parameters:
+  target_paper_summary: "${TARGET_PAPER_SUMMARY}"
+  target_arxiv_id: "${TARGET_ARXIV_ID}"
+  num_related_papers: "${NUM_RELATED_PAPERS:-5}"
+
+workflow:
+  # Step 1: Generate 3 search queries based on the target paper
+  - task:
+      name: "generate_queries"
+      instruction: |
+        Using the target paper's summary as context:
+        "{{target_paper_summary}}"
+        
+        Generate exactly 3 search queries to find related papers on arXiv. Each query should:
+        - Be 4-8 words long
+        - The query should be focused on different aspects of the target paper.
+        
+        Examples of good queries:
+        - "LLM for academic paper review"
+        - "Entropy-based trajectory selection in RL"
+        - "Agentic retrieval augmented reasoning"
+        
+        
+        Return ONLY a JSON array of 3 query strings:
+        ["query1", "query2", "query3"]
+      save_as: "queries"
+
+  # Step 2: Search with query 1
+  - task:
+      name: "search_query_1"
+      instruction: |
+        Use firecrawl to search for the first query. 
+        IMPORTANT: For the query, add the "arxiv paper:" prefix. You should ONLY use the first query from the JSON array.
+        query: arxiv paper: {{queries}}
+        num_results: {{num_related_papers}}
+        ONLY return the tool call output, no extra commentary.
+      save_as: "search_results_1"
+
+  # Step 3: Search with query 2
+  - task:
+      name: "search_query_2"
+      instruction: |
+        Use firecrawl to search for the second query. 
+        IMPORTANT: For the query, add the "arxiv paper:" prefix. You should ONLY use the second query from the JSON array.
+        query: arxiv paper: {{queries}}
+        num_results: {{num_related_papers}}
+        ONLY return the tool call output, no extra commentary.
+      save_as: "search_results_2"
+
+  # Step 4: Search with query 3
+  - task:
+      name: "search_query_3"
+      instruction: |
+        Use firecrawl to search for the third query. 
+        IMPORTANT: For the query, add the "arxiv paper:" prefix. You should ONLY use the third query from the JSON array.
+        query: arxiv paper: {{queries}}
+        num_results: {{num_related_papers}}
+        ONLY return the tool call output, no extra commentary.
+      save_as: "search_results_3"
+
+  # Step 5: Concatenate all search results and extract arXiv IDs
+  - task:
+      name: "extract_arxiv_ids"
+      instruction: |
+        You have search results from 3 different queries:
+        
+        Query 1 results: {{search_results_1}}
+        Query 2 results: {{search_results_2}}
+        Query 3 results: {{search_results_3}}
+        
+        Task:
+        1. Extract all arXiv IDs from URLs in the search results
+           - Look for URLs matching patterns like:
+             * https://arxiv.org/abs/XXXX.XXXXX
+             * https://arxiv.org/pdf/XXXX.XXXXX.pdf
+             * arxiv.org/abs/XXXX.XXXXX
+             * https://huggingface.co/papers/XXXX.XXXXX
+             * https://www.alphaxiv.org/overview/XXXX.XXXXX
+           - Extract just the ID portion (e.g., "2601.22766")
+        
+        2. Remove duplicates - keep only unique arXiv IDs
+        
+        3. Exclude the target paper ID: {{target_arxiv_id}}
+        
+        
+        Return ONLY a JSON array of arXiv IDs (strings):
+        ["2601.22766", "2601.22161", ...]
+      save_as: "related_paper_ids"
+
+  - return: "related_paper_ids"

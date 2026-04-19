@@ -1,0 +1,80 @@
+name: "pdf_parser"
+goal: "Given an arXiv ID, download the PDF and parse it to text, storing both in a folder named after the arxiv_id."
+
+parameters:
+  arxiv_id: "${ARXIV_ID}"
+  target_dir: "${TARGET_DIR}"
+
+workflow:
+  - task:
+      name: "download_pdf"
+      instruction: |
+        Create directory and download the PDF.
+        Remember to replace the template arxiv_id with the actual parameter!
+        - shell_run("mkdir -p {{target_dir}}/{{arxiv_id}}")
+        - shell_run("curl -L --fail --retry 3 --retry-delay 1 -o {{target_dir}}/{{arxiv_id}}/{{arxiv_id}}.pdf \"https://arxiv.org/pdf/{{arxiv_id}}.pdf\"")
+        - shell_run("test -s {{target_dir}}/{{arxiv_id}}/{{arxiv_id}}.pdf")
+
+        Return ONLY JSON:
+        {
+          "pdf_path": "{{target_dir}}/{{arxiv_id}}/{{arxiv_id}}.pdf",
+          "status": "downloaded"
+        }
+      save_as: "pdf"
+
+  - task:
+      name: "parse_pdf"
+      instruction: |
+        Parse the PDF into text, storing in the same directory.
+        Remember to replace the template arxiv_id with the actual parameter!
+        - parse_out = extract_text_from_file(
+            file_path="{{target_dir}}/{{arxiv_id}}/{{arxiv_id}}.pdf",
+            output_dir="{{target_dir}}/{{arxiv_id}}",
+            summary_length=5000
+          )
+        
+        CRITICAL: After calling extract_text_from_file, check the result:
+        - If it succeeds (returns text_path or content), return IMMEDIATELY with success=true
+        - DO NOT call extract_text_from_file again
+        - DO NOT retry if it succeeds
+        
+        Return ONLY JSON:
+        {
+          "parse_out": "<parse_out>",
+          "success": true
+        }
+        
+        If it fails, return:
+        {
+          "parse_out": "error message",
+          "success": false
+        }
+      save_as: "parse_info"
+
+  - task:
+      name: "resolve_text_path"
+      instruction: |
+        Determine the parsed text file path from the previous step.
+        
+        First, check if parse_info.success is true. If not, report the error.
+        
+        Preferred method:
+        - if parse_info.parse_out has a "text_path" field, use it directly.
+        
+        Fallback method (only if text_path not in parse_out):
+        - shell_run("ls -1 {{target_dir}}/{{arxiv_id}} | grep -E '\.txt$' | head -n 1")
+        - construct full path: "{{target_dir}}/{{arxiv_id}}/<filename>"
+
+        Return ONLY JSON:
+        {
+          "text_path": "...",
+          "pdf_path": "{{target_dir}}/{{arxiv_id}}/{{arxiv_id}}.pdf",
+          "paper_dir": "{{target_dir}}/{{arxiv_id}}",
+          "abs_url": "https://arxiv.org/abs/{{arxiv_id}}",
+          "pdf_url": "https://arxiv.org/pdf/{{arxiv_id}}.pdf",
+          "arxiv_id": "{{arxiv_id}}",
+          "success": true
+        }
+      save_as: "final_output"
+
+  - return: "final_output"

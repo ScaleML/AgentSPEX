@@ -1,0 +1,128 @@
+name: "reproduce_issue"
+goal: "Create a script that reproduces the reported issue"
+system_prompt: |
+    You are a helpful assistant that can interact multiple times with a computer shell to solve programming tasks.
+
+    STRICT FORMAT RULES:
+    - Your response must contain AT MOST one code block.
+    - If you include more than one code block, your response will be REJECTED.
+    - The code block must contain ONE command (or commands connected with && or ||).
+    - The code block must be a bash block (raw shell command).
+    - If you have nothing to execute, respond with plain text and NO code block.
+
+    Include a THOUGHT section before your command where you explain your reasoning process.
+    Format your response as shown in <format_example>.
+
+    <format_example>
+    THOUGHT: Your reasoning and analysis here
+
+    ```bash
+    your_command_here
+    ```
+    </format_example>
+
+    You must create a NEW minimal repro script for the reported issue.
+
+    When you are done with a task, return the script filename (relative to workspace, NOT absolute path) via:
+    ```bash
+    printf 'RETURN:%s\n' 'repro_issue.py - Run with: python3 repro_issue.py'
+    ```
+
+    Failure to follow these rules will cause your response to be rejected.
+
+config:
+    model: "claude-opus-4-6"
+    temperature: 1.0
+    model_kwargs:
+        reasoning_effort: "high"
+    enabled_tools: []
+    enable_inline_tool_calls: true
+    swebench_mode: true
+    expose_submodules_as_tools: false
+    max_tool_calls_per_step: 25
+
+function:
+    name: "reproduce_issue"
+    description: |
+        Write a minimal script that reproduces the issue described in the problem statement. When you are done, return the script filename (relative to workspace) via:
+        shell_run({"text": "printf 'RETURN:%s\\n' 'repro_issue.py - Run with: python3 repro_issue.py'", "cwd": "{{code_path}}"})
+
+        Args:
+            query: The reproduction goal or focus for the script.
+            code_path: Where the repo lives.
+    parameters:
+        model:
+            - name: "query"
+              type: "string"
+              description: "The reproduction goal or focus for the script."
+              required: true
+        context:
+            - name: "code_path"
+              type: "string"
+              description: "Workspace directory path."
+            - name: "problem_statement"
+              type: "string"
+              description: "Full issue description from the parent workflow."
+    return: "script_path"
+
+workflow:
+    - step:
+        name: "create_repro_file"
+        instruction: |
+            <instructions>
+
+            Requirements:
+            - Create one new empty script file (e.g., `repro_issue.py`) in this folder {{code_path}}.
+            - Do not write any script content yet.
+
+            ## Submission
+            After you create the new test script, call (use filename only, NOT absolute path):
+
+            ```bash
+            printf 'RETURN:%s\n/workspace/tmp/<repo-name>/repro_issue.py - Run with: python3 /workspace/tmp/<repo-name>/repro_issue.py'
+            ```
+
+            </instructions>
+        save_as: "script_path"
+
+    - step:
+        name: "write_repro_script"
+        instruction: |
+            Problem to reproduce: {{query}}
+
+            The repository is located at {{code_path}}
+
+            <pr_description>
+
+            {{problem_statement}}
+
+            </pr_description>
+
+            Edit {{script_path}} to reproduce the problem below. The script should be very concise and targeted.
+
+            Inside the script, add prints that explain what the test is doing and what it expects and where the error(s) are. Write in huge text whether all the tests PASS or FAIL! Include a warning to continue working hard to fix the bug and to continue investigating.
+
+            You must make sure the test prints out FAILED! if there is still a bug
+
+            Suggested Workflow:
+            1. Given the additional context, run a few grep or other bash commands explore the codebase
+            2. Read the provided file path and edit it so that it becomes a script that can reproduce the provided issue.
+            3. Run and read the file you created.
+            4. Verify whether the script's output can reproduce the provided problem. If it cannot, go back to step 1.
+            5. When you are done, in a new message, send `printf 'RETURN:%s\n' 'repro_issue.py - <description of how to use the test>'` in a code block (use filename only, NOT absolute path)
+
+            Requirements:
+            - Use the file created in the previous step (e.g., `repro_issue.py`) under the workspace.
+            - The script MUST print a clear "FAIL" line when the bug is present, and a clear "PASS" line only when fixed.
+            - Return ONLY the script filename (e.g., `repro_issue.py`) via the RETURN command - NOT the absolute path.
+
+            ## Submission
+            When you've completed your work (reading, editing, testing), and cannot make further progress
+            issue exactly the following command (use filename only, NOT absolute path):
+
+            ```bash
+            printf 'RETURN:%s\n' 'repro_issue.py - Run with: python3 repro_issue.py to see PASS/FAIL'
+            ```
+        save_as: "script_path"
+
+    - return: "script_path"

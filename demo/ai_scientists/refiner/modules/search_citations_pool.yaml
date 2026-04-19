@@ -1,0 +1,27 @@
+name: "search_citations_pool_module"
+goal: "Search for additional citations using a deterministic Python script and build a citation pool (JSON)."
+
+config:
+    model: "gpt-5.2"
+    max_tokens_per_step: 200000
+    max_tool_calls_per_step: 10
+    plan_revision_max_steps: 0
+
+parameters:
+    sections_dir: "${SECTIONS_DIR}"
+    output_dir: "${OUTPUT_DIR}"
+    min_refs: "${MIN_REFS:-20}"
+
+workflow:
+  # Single step: use the search_citation_pool MCP tool
+  - step:
+      name: "run_search_tool"
+      instruction: |
+        Use the search_citation_pool tool to find and build a citation pool:
+        search_citation_pool sections_dir="{{sections_dir}}" output_dir="{{output_dir}}"
+
+        The tool handles everything: caching, Firecrawl search, BibTeX extraction, dedup, and saving.
+        Return the result message (e.g., "POOL_SAVED: N citations" or "CACHED: ...").
+      save_as: "pool_result"
+
+  - return: "pool_result"

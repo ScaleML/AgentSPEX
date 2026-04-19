@@ -1,0 +1,109 @@
+name: "process_paper"
+goal: "Read chunked paper sections and store summaries in memory."
+
+parameters:
+  chunk_dir: "${CHUNK_DIR}"
+  memory_file: "${EPISODIC_MEMORY_FILE}"
+  arxiv_id: "${ARXIV_ID}"
+
+workflow:
+  # Abstract and Contribution Processing
+  - task:
+      name: "read_abstract_and_contribution"
+      instruction: |
+        Read the abstract + contribution chunk:
+        - content = fs_read(file_path="{{chunk_dir}}/abs_con.txt")
+
+        Extract "abstract" and "contribution" if headings are present. Please copy the content exactly as it is in the file.
+        If the content is not clearly stated, use your own words to summarize the content.
+
+        Return ONLY JSON:
+        {
+          "abstract": "<abstract_text>",
+          "contribution": "<contribution_text>"
+        }
+      save_as: "abs_con_content"
+
+  - task:
+      name: "store_abstract_and_contribution"
+      instruction: |
+        The abstract and contribution of this paper are {{abs_con_content}}.
+        Store the abstract and contribution in memory, remember to replace the placeholder with the actual value.
+        - memory("store", key="paper:{{arxiv_id}}:abstract", content="<abstract_text>", tags="paper,abstract,arxiv:{{arxiv_id}}", memory_file="{{memory_file}}")
+        - memory("store", key="paper:{{arxiv_id}}:contribution", content="<contribution_text>", tags="paper,contribution,arxiv:{{arxiv_id}}", memory_file="{{memory_file}}")
+
+        Return ONLY: "stored"
+      save_as: "abs_con_ack" 
+
+  # Method Processing
+  - task:
+      name: "read_method"
+      instruction: |
+        Read method chunk:
+        - content = fs_read(file_path="{{chunk_dir}}/method.txt")
+
+        Summarize the method into 5 sentences (string only).
+
+        Return ONLY JSON:
+        {
+          "method": "<method_summary>"
+        }
+      save_as: "method_content"
+
+  - task:
+      name: "store_method"
+      instruction: |
+        The method summary of this paper is {{method_content}}.
+        Store the method summary in memory, remember to replace the placeholder with the actual value.
+        - memory("store", key="paper:{{arxiv_id}}:method", content="<method_summary>", tags="paper,method,arxiv:{{arxiv_id}}", memory_file="{{memory_file}}")
+
+        Return ONLY: "stored"
+      save_as: "method_ack"
+
+  # Experiment Processing
+  - task:
+      name: "read_experiment"
+      instruction: |
+        Read experiment chunk:
+        - content = fs_read(file_path="{{chunk_dir}}/experiment.txt")
+
+        Summarize the experiment setup into a few sentences (string only).
+
+        Return ONLY JSON:
+        {
+          "experiment": "<experiment_summary>"
+        }
+      save_as: "experiment_content"
+
+  - task:
+      name: "store_experiment"
+      instruction: |
+        The experiment summary of this paper is {{experiment_content}}.
+        Store the experiment summary in memory, remember to replace the placeholder with the actual value.
+        - memory("store", key="paper:{{arxiv_id}}:experiment", content="<experiment_summary>", tags="paper,experiment,arxiv:{{arxiv_id}}", memory_file="{{memory_file}}")
+
+        Return ONLY: "stored"
+      save_as: "experiment_ack"
+
+  # Consolidate all paper content for easy access
+  - task:
+      name: "consolidate_paper_summary"
+      instruction: |
+        Consolidate all the paper content from previous steps:
+        - Abstract and Contribution: {{abs_con_content}}
+        - Method: {{method_content}}
+        - Experiment: {{experiment_content}}
+        
+        Combine them into a single JSON structure. Extract the actual values from each JSON object.
+        
+        Return ONLY JSON:
+        {
+          "arxiv_id": "{{arxiv_id}}",
+          "abstract": "<abstract from abs_con_content>",
+          "contribution": "<contribution from abs_con_content>",
+          "method": "<method from method_content>",
+          "experiment": "<experiment from experiment_content>"
+        }
+      save_as: "paper_summary"
+
+  - return: "paper_summary"

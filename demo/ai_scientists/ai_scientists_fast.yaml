@@ -1,0 +1,65 @@
+name: "ai_scientists_fast"
+goal: "Complete Fast TinyScientist workflow: Quick Idea Generation + Fast Paper Writing (no safety check, no citations, no formulas)"
+
+# Main workflow config
+config:
+    model: "gpt-5.2"
+    max_tokens_per_step: 200000
+    max_tool_calls_per_step: 50
+    plan_revision_max_steps: 0
+
+parameters:
+  domain: "bioinformatics"
+  intent: "Develop generative models for de novo molecular design with desired pharmacological properties"
+  num_ideas: 1
+  output_dir: "${AGENTSPEX_RUN_SANDBOX_DIR_ABS}"
+  model: "gpt-5.2"
+  paper_format: "latex"
+
+workflow:
+  # Step 1: Setup - Create unified output directory structure
+  - task:
+      name: "setup_environment"
+      instruction: |
+        Use fs_mkdir tool to create the unified output directory structure:
+        - {{output_dir}}
+        - {{output_dir}}/thinker
+        - {{output_dir}}/writer
+        
+        Use fs_write tool to save the configuration file:
+        - {{output_dir}}/config.txt with content:
+          domain={{domain}}
+          intent={{intent}}
+          num_ideas={{num_ideas}}
+          model={{model}}
+          paper_format={{paper_format}}
+        
+        Return confirmation that all directories and files have been created and do not use any other tool except fs_mkdir and fs_write.
+      save_as: "setup_result"
+
+  # Step 2: Call ai_scientists_thinker_fast submodule (Quick Idea Generation)
+  - call:
+      module: "demo/ai_scientists/thinker/ai_scientists_thinker_fast.yaml"
+      parameters:
+        domain: "{{domain}}"
+        intent: "{{intent}}"
+        num_ideas: "{{num_ideas}}"
+        output_dir: "{{output_dir}}/thinker"
+        model: "{{model}}"
+      save_as: "thinker_result"
+      return: "prev_output"
+
+  # Step 3: Set idea_file_path for downstream Writer
+  - set_variable:
+      name: "idea_file_path"
+      value: "{{output_dir}}/thinker/step-2-final-ideas.json"
+
+  # Step 4: Call writer_fast submodule (Fast Paper Writing)
+  - call:
+      module: "demo/ai_scientists/writer/ai_scientists_writer_fast.yaml"
+      parameters:
+        idea_file: "{{idea_file_path}}"
+        output_dir: "{{output_dir}}/writer"
+        paper_format: "{{paper_format}}"
+      save_as: "writer_result"
+      return: "prev_output"

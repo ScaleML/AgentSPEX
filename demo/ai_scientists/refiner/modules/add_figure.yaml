@@ -1,0 +1,174 @@
+name: "add_figure_module"
+goal: "Generate a research overview figure using Nano Banana (Gemini) and insert it into the paper with proper caption and reference."
+
+config:
+    model: "gpt-5.2"
+    max_tokens_per_step: 200000
+    max_tool_calls_per_step: 15
+    plan_revision_max_steps: 0
+
+parameters:
+    sections_dir: "${SECTIONS_DIR}"
+
+workflow:
+  # ── Step 1: Check if figure already exists ─────────────────────────────
+  - step:
+      name: "check_figure_exists"
+      instruction: |
+        Check if the paper already has a properly inserted figure.
+
+        shell_run: ls -la {{sections_dir}}/figures/research_overview.png 2>/dev/null && echo "FILE_EXISTS" || echo "FILE_MISSING"
+        shell_run: grep -l "\\includegraphics" {{sections_dir}}/*.tex 2>/dev/null | head -1 || echo "NO_FIGURE_IN_TEX"
+
+        If BOTH the figure file exists AND \includegraphics is found in a .tex file,
+        return "SKIPPED: figure already exists and is referenced in paper".
+        Otherwise return "NEEDED".
+      save_as: "check_result"
+
+  # ── Step 2: Write figure description (LLM summarizes the paper) ────────
+  - step:
+      name: "write_figure_description"
+      instruction: |
+        If {{check_result}} starts with "SKIPPED", return "SKIPPED".
+
+        Your job: read the paper and write a structured description for a research
+        overview INFOGRAPHIC. This is NOT a flowchart or algorithm diagram — it is
+        a colorful, visually rich poster-style figure showing WHAT the research does
+        at a high level, so a reader can understand the paper at a glance.
+
+        Think of overview figures in top AI papers like EmbodiedBench, ToolBench,
+        or AgentBench — large colorful blocks with icons and concise text.
+
+        Step A: Read the paper sections
+        fs_read {{sections_dir}}/abstract.tex
+        fs_read {{sections_dir}}/method.tex
+        fs_read {{sections_dir}}/introduction.tex
+
+        Step B: Write a figure description
+
+        Based on what you read, write a structured description of the key components
+        that should appear in the overview infographic. The description should tell the
+        image generator WHAT to draw — the modules, their contents, and relationships.
+
+        IMPORTANT STYLE GUIDANCE for the description:
+        - Describe MODULES/COMPONENTS as visual blocks, NOT algorithm steps
+        - Think "system architecture poster" NOT "step-by-step flowchart"
+        - Each block represents a CONCEPT or MODULE, not a step in a process
+        - The layout should be spatial (side-by-side, hub-and-spoke, or layered),
+          NOT a linear top-to-bottom flow
+
+        Format your description as follows:
+
+        ---
+        This infographic should show the following modules of the [SYSTEM NAME] system
+        in a colorful, poster-style layout:
+
+        **Module 1 — "[Component Name]"** (fill color: [pastel color like light blue])
+        - [1-2 bullet points describing what this module represents]
+        - Icon: [emoji or icon name, e.g., magnifying glass, shield, brain]
+
+        **Module 2 — "[Component Name]"** (fill color: [different pastel color])
+        - [1-2 bullet points]
+        - Icon: [icon name]
+
+        [... more modules as needed, typically 4-6 ...]
+
+        **Spatial relationships:**
+        - [Describe how modules relate spatially, e.g., "Module 1 connects to Module 2"]
+        - [Key relationships between modules]
+
+        **Key visual emphasis:**
+        - [What is the main innovation? Make it the largest or most central block]
+        - [Any special visual treatment needed]
+        ---
+
+        Guidelines:
+        - Include 4-6 major conceptual modules (not too many, not too few)
+        - Each module title should be 2-4 words
+        - Bullet points should be under 8 words each
+        - Suggest distinct pastel fill colors for each module
+        - Suggest appropriate icons (magnifying glass, checkmark, brain, document, gear, etc.)
+        - Describe spatial relationships, NOT sequential steps
+        - Highlight the paper's KEY INNOVATION with special visual emphasis
+        - Do NOT include LaTeX, math symbols, or equations
+        - Do NOT describe a step-by-step algorithm — describe a system architecture
+        - Write in plain English suitable for an image generation model
+
+        Step C: Save the description
+        fs_write {{sections_dir}}/figure_description.txt: <your description>
+
+        Return "DESCRIPTION_READY"
+      save_as: "description_result"
+
+  # ── Step 3: Generate the figure ────────────────────────────────────────
+  - step:
+      name: "generate_figure_step"
+      instruction: |
+        If {{description_result}} starts with "SKIPPED", return "SKIPPED: figure already exists".
+
+        Use the generate_figure tool:
+        generate_figure sections_dir="{{sections_dir}}" description_file="{{sections_dir}}/figure_description.txt"
+
+        If the result contains "FIGURE_GENERATED" or "CACHED", return the message.
+        If it contains an error, return "FAILED: figure generation failed".
+      save_as: "figure_gen_result"
+
+  # ── Step 4: Insert figure into method.tex ──────────────────────────────
+  - step:
+      name: "insert_figure_in_tex"
+      instruction: |
+        If {{figure_gen_result}} starts with "SKIPPED" or "FAILED", return {{figure_gen_result}}.
+
+        Your job: insert the generated figure into the paper.
+
+        Step A: Read method.tex
+        fs_read {{sections_dir}}/method.tex
+
+        Step B: Read main.tex to check if graphicx is loaded
+        fs_read {{sections_dir}}/main.tex
+
+        Step C: Ensure \usepackage{graphicx} is in main.tex
+        If main.tex does NOT contain "\usepackage{graphicx}", you must add it.
+        Read the current main.tex, add \usepackage{graphicx} after other \usepackage lines,
+        then write the updated main.tex using fs_write.
+
+        Step D: Insert figure block into method.tex
+        Find a good location in method.tex to insert the figure — typically after
+        the first paragraph that describes the overall approach/pipeline, or before
+        a paragraph that says "as shown in" or "our framework".
+
+        Insert this LaTeX block:
+
+        \begin{figure}[t]
+            \centering
+            \includegraphics[width=0.9\textwidth]{figures/research_overview.png}
+            \caption{Overview of the proposed method. <ADD 1 SENTENCE DESCRIBING THE KEY COMPONENTS BASED ON THE PAPER CONTENT>.}
+            \label{fig:method_overview}
+        \end{figure}
+
+        IMPORTANT for the caption:
+        - Write a real, specific caption based on what you read in method.tex
+        - Keep it to 1-2 sentences
+        - Do NOT use generic captions like "Flowchart of the method"
+
+        Step E: Add a reference to the figure in the text
+        Find a natural place in method.tex (near the figure) to add a sentence like:
+        "Figure~\ref{fig:method_overview} illustrates the overall architecture."
+        or modify an existing sentence to include "as shown in Figure~\ref{fig:method_overview}".
+
+        Do NOT add the reference in abstract.tex (abstracts must not have \ref commands).
+
+        Step F: Write the updated method.tex
+        Use fs_write to write the complete updated method.tex.
+
+        Strict LaTeX rules:
+        - Keep ALL apostrophes: model's, agent's, dataset's
+        - Never use bare % — always \%
+        - Never use double braces {{ or }}
+        - Preserve all existing \cite{}, \label{}, environments exactly
+        - The figure path must be: figures/research_overview.png (relative, no leading /)
+
+        Return "INSERTED: figure added to method.tex with caption and reference"
+      save_as: "insert_result"
+
+  - return: "insert_result"

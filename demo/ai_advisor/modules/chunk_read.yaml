@@ -1,0 +1,52 @@
+name: "run_chunking"
+goal: "Execute chunking python script ONLY, DO NOT analyze, modify, or explain the code. DO NOT perform any other actions."
+
+parameters:
+  input_file: "${INPUT_FILE}"
+  output_dir: "${OUTPUT_DIR}"
+
+workflow:
+  - task:
+      name: "execute_chunking_only"
+      instruction: |
+        You MUST ONLY execute the following Python code using execute_python_code.
+        Do NOT analyze, modify, or explain the code.
+        Do NOT perform any other actions.
+
+        Execute this code with the specified input and output parameters.
+        Remember to replace the input_file and output_dir with the actual values.
+
+        Here is the code, strictly use this code for execusion:
+          from pathlib import Path
+          import argparse
+          import sys
+
+          def chunk_txt_by_bytes(input_file: str, output_dir: str):
+              chunks = [
+                  ("abs_con.txt",     0, 8000),
+                  ("method.txt",      12000, 20000),
+                  ("experiment.txt",  18000, 26000),
+              ]
+
+              input_path = Path(input_file)
+              output_path = Path(output_dir)
+
+              if not input_path.exists():
+                  raise FileNotFoundError(f"Input file not found: {input_path}")
+
+              output_path.mkdir(parents=True, exist_ok=True)
+
+              data = input_path.read_bytes()
+
+              for name, start, end in chunks:
+                  chunk_bytes = data[start:end]
+                  chunk_file = output_path / name
+                  chunk_file.write_bytes(chunk_bytes)
+                  print(f"[OK] Wrote {chunk_file} ({len(chunk_bytes)} bytes)")
+
+          if __name__ == "__main__":
+              input_file = "{{input_file}}"
+              output_dir = "{{output_dir}}"
+              chunk_txt_by_bytes(input_file, output_dir)
+      enabled_tools: ["execute_python_code"]
+      save_as: "chunk_execution_result"

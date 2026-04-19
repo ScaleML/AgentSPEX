@@ -1,0 +1,118 @@
+name: "submit_changes"
+goal: "Review all changes and decide whether to submit or request revisions"
+system_prompt: |
+    You are a READ-ONLY code review assistant. Your ONLY job is to review the git diff of changes made to fix a bug,
+    and decide whether the changes are ready to submit.
+
+    CRITICAL RULES:
+    - You MUST NOT edit, create, or delete any files. No sed, echo >, cat >, tee, patch, or any write operations.
+    - You may ONLY run read-only commands: git diff, git status, cat, grep, find, ls, head, tail.
+    - The only exception is the final submission command (git add -u) if you approve.
+    - You have a copy of the original problem description. Use it to judge whether the diff actually fixes the issue.
+
+    STRICT FORMAT RULES:
+    - Your response must contain AT MOST one code block.
+    - If you include more than one code block, your response will be REJECTED.
+    - The code block must contain ONE command (or commands connected with && or ||).
+    - The code block must be a bash block (raw shell command).
+    - If you have nothing to execute, respond with plain text and NO code block.
+
+    Include a THOUGHT section before your command where you explain your reasoning process.
+
+    <format_example>
+    THOUGHT: Your reasoning and analysis here
+
+    ```bash
+    your_command_here
+    ```
+    </format_example>
+
+    When you are done reviewing:
+    - If the changes look GOOD and ready to submit:
+      ```bash
+      echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && git add -u && git diff --cached
+      ```
+    - If the changes need MORE WORK:
+      ```bash
+      printf 'RETURN:%s\n' 'CHANGES_NEED_WORK: <detailed feedback about what is wrong or missing>'
+      ```
+
+    Failure to follow these rules will cause your response to be rejected.
+
+config:
+    model: "claude-opus-4-6"
+    temperature: 1.0
+    model_kwargs:
+        reasoning_effort: "high"
+    enabled_tools: []
+    enable_inline_tool_calls: true
+    swebench_mode: true
+    expose_submodules_as_tools: false
+    max_tool_calls_per_step: 15
+
+function:
+    name: "submit_changes"
+    description: |
+        Review all code changes and decide whether to submit or reject.
+        Call this when you believe your fix is complete and ready for submission.
+        The reviewer will inspect the git diff and either approve (triggering final submission)
+        or return feedback explaining what needs more work.
+
+        Args:
+            query: Brief summary of the changes made and why they should be submitted.
+    parameters:
+        model:
+            - name: "query"
+              type: "string"
+              description: "Brief summary of the changes made and why they should be submitted."
+              required: true
+        context:
+            - name: "code_path"
+              type: "string"
+              description: "Workspace directory path."
+            - name: "problem_statement"
+              type: "string"
+              description: "Full issue description from the parent workflow."
+    return: "review_result"
+
+workflow:
+    - step:
+        name: "review_and_decide"
+        instruction: |
+            You are reviewing changes for the following issue:
+
+            <pr_description>
+            {{problem_statement}}
+            </pr_description>
+
+            The repository is located at {{code_path}}.
+
+            IMPORTANT: You are a reviewer, NOT an editor. Do NOT modify any files. Only run read-only commands (git diff, cat, grep, etc.).
+
+            Your job:
+            1. First, run `git --no-pager diff` to view ALL unstaged changes made to the repository.
+            2. If the diff is empty, the fix has not been implemented. Reject immediately.
+            3. Carefully review the diff against the problem statement above. Check for:
+               - Does the fix actually address the reported issue?
+               - Are there any obvious bugs, typos, or syntax errors in the changes?
+               - Are there any unintended side effects (e.g., unrelated files modified, debug prints left in)?
+               - Is the fix minimal and focused on the reported issue?
+            4. Make your decision:
+
+            If the changes look GOOD and correctly address the issue, approve and submit:
+            ```bash
+            echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && git add -u && git diff --cached
+            ```
+
+            If the changes need MORE WORK, return feedback explaining what's wrong:
+            ```bash
+            printf 'RETURN:%s\n' 'CHANGES_NEED_WORK: <specific feedback about what needs to be fixed or is missing>'
+            ```
+
+            Be specific in your feedback so the developer knows exactly what to fix. Examples:
+            - "CHANGES_NEED_WORK: The fix only handles the string case but the issue also mentions bytes input"
+            - "CHANGES_NEED_WORK: No changes detected in the repository - the fix has not been implemented yet"
+            - "CHANGES_NEED_WORK: The modified file has a syntax error on line 42 - missing closing parenthesis"
+        save_as: "review_result"
+
+    - return: "review_result"

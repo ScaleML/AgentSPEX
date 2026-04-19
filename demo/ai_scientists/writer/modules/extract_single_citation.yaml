@@ -1,0 +1,77 @@
+name: "extract_single_citation_module"
+goal: "Extract citation information from a single downloaded paper file"
+
+# Parameters from parent workflow
+parameters:
+    url: "${URL}"
+    file_path: "${FILE_PATH}"
+
+workflow:
+    # ========================================
+    # Step 1: Extract citation metadata
+    # ========================================
+    - task:
+        name: "extract_paper_title"
+        instruction: |
+            NOTE: Use the EXACT path provided below, DO NOT add any parent directories !!!
+
+            Read the first 3000 bytes from the paper file at: {{file_path}}
+
+            Extract ONLY the title of the paper. The title is usually:
+            - At the top of the first page
+            - In a larger or bold font
+            - Above the author names
+
+            Return ONLY the extracted title as a single line of text with no extra commentary or formatting.
+        save_as: "paper_title"
+
+    - task:
+        name: "extract_bibtex_by_tool"
+        instruction: |
+            Use get_bibtex_from_url tool to retrieve the bibtex using the given url: {{url}} and the paper title: {{paper_title}}
+
+            ONLY return the content of the bibtex with no extra commentary.
+        save_as: "bibtex_citation"
+
+    - task:
+        name: "extract_abstract_by_tool"
+        instruction: |
+            Use get_abstract_from_url tool to retrieve the bibtex using the given url: {{url}} and the paper title: {{paper_title}}
+
+            ONLY return the content of the abstract with no extra commentary, if no abstract retreived, ONLY return None.
+        save_as: "abstract"
+    
+    - if:
+        condition: "abstract == None"
+        then:
+            - task:
+                name: "extract_abstract_by_read_file"
+                instruction: |
+                    NOTE: Use the EXACT path provided below, DO NOT add any parent directories !!!
+
+                    Read the first 5000 bytes from the paper file at: {{file_path}}
+
+                    Extract ONLY the abstract of the paper. The title is usually:
+                    - At the first page
+                    - Has a section header of abstract
+                    - Below the author names
+
+                    Return ONLY the extracted abstract as a single line of text with no extra commentary or formatting.
+                save_as: "abstract"
+    
+    - task:
+        name: "prepare_return_dict"
+        instruction: |
+            Return as python compatible JSON dict:
+
+            {
+                "bibtex": "{{bibtex_citation}}"",
+                "file_path": "{{file_path}}"
+                "title": "{{paper_title}}"
+                "abstract": {{abstract}}
+            }
+
+            ONLY return the python dict with no extra commentary.
+        save_as: "return_dict"
+
+    - return: "return_dict"

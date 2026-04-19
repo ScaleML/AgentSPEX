@@ -1,0 +1,167 @@
+name: "rlhf_verifiable_rewards_search_2025_2026"
+goal: "Find 12-15 recent (2025-2026) academic papers on 'RLHF with Verifiable Rewards' and produce a structured list with metadata and relevance notes."
+
+parameters:
+  query1: "RLHF verifiable rewards"
+  query2: "reinforcement learning human feedback verifiable"
+  query3: "RLHF verification rewards"
+  query4: "verifiable reward models RLHF"
+  start_year: 2025
+  end_year: 2026
+  per_query_limit: 10
+  arxiv_num_results: 3
+  candidate_min: 12
+  candidate_max: 15
+
+config:
+  model: "gpt-5-mini"
+  max_tool_calls_per_step: 15
+  enabled_tools: ["paper_search", "arxiv_search"]
+
+workflow:
+  - parallel:
+      - task:
+          name: "search_q1"
+          instruction: |
+            Use paper_search to run an academic search with this exact query: "{{query1}}".
+            Constraints:
+            - Restrict to publication years between {{start_year}} and {{end_year}} inclusive (apply tool filters if available; otherwise filter after retrieval).
+            - Sort by most recent.
+            - Set result_limit to {{per_query_limit}} (≤10).
+            After retrieving results, transform them into a compact JSON array with objects containing ONLY:
+            {
+              "title": string,
+              "authors": [string, ...],
+              "publication_date": "YYYY-MM-DD" or "YYYY",
+              "abstract": string or null,
+              "doi": string or null,
+              "arxiv_id": string or null,
+              "url": string
+            }
+            Filter out any items not in years {{start_year}}-{{end_year}}.
+            Return ONLY the JSON array. Do not include any other text.
+          save_as: "results_q1"
+      - task:
+          name: "search_q2"
+          instruction: |
+            Use paper_search to run an academic search with this exact query: "{{query2}}".
+            Constraints:
+            - Restrict to publication years between {{start_year}} and {{end_year}} inclusive (apply tool filters if available; otherwise filter after retrieval).
+            - Sort by most recent.
+            - Set result_limit to {{per_query_limit}} (≤10).
+            After retrieving results, transform them into a compact JSON array with objects containing ONLY:
+            {
+              "title": string,
+              "authors": [string, ...],
+              "publication_date": "YYYY-MM-DD" or "YYYY",
+              "abstract": string or null,
+              "doi": string or null,
+              "arxiv_id": string or null,
+              "url": string
+            }
+            Filter out any items not in years {{start_year}}-{{end_year}}.
+            Return ONLY the JSON array. Do not include any other text.
+          save_as: "results_q2"
+      - task:
+          name: "search_q3"
+          instruction: |
+            Use paper_search to run an academic search with this exact query: "{{query3}}".
+            Constraints:
+            - Restrict to publication years between {{start_year}} and {{end_year}} inclusive (apply tool filters if available; otherwise filter after retrieval).
+            - Sort by most recent.
+            - Set result_limit to {{per_query_limit}} (≤10).
+            After retrieving results, transform them into a compact JSON array with objects containing ONLY:
+            {
+              "title": string,
+              "authors": [string, ...],
+              "publication_date": "YYYY-MM-DD" or "YYYY",
+              "abstract": string or null,
+              "doi": string or null,
+              "arxiv_id": string or null,
+              "url": string
+            }
+            Filter out any items not in years {{start_year}}-{{end_year}}.
+            Return ONLY the JSON array. Do not include any other text.
+          save_as: "results_q3"
+      - task:
+          name: "search_q4"
+          instruction: |
+            Use paper_search to run an academic search with this exact query: "{{query4}}".
+            Constraints:
+            - Restrict to publication years between {{start_year}} and {{end_year}} inclusive (apply tool filters if available; otherwise filter after retrieval).
+            - Sort by most recent.
+            - Set result_limit to {{per_query_limit}} (≤10).
+            After retrieving results, transform them into a compact JSON array with objects containing ONLY:
+            {
+              "title": string,
+              "authors": [string, ...],
+              "publication_date": "YYYY-MM-DD" or "YYYY",
+              "abstract": string or null,
+              "doi": string or null,
+              "arxiv_id": string or null,
+              "url": string
+            }
+            Filter out any items not in years {{start_year}}-{{end_year}}.
+            Return ONLY the JSON array. Do not include any other text.
+          save_as: "results_q4"
+
+  - task:
+      name: "merge_dedupe_select_candidates"
+      instruction: |
+        You are given four JSON arrays of paper records: {{results_q1}}, {{results_q2}}, {{results_q3}}, {{results_q4}}.
+        1) Parse and combine them into a single list.
+        2) Deduplicate using this priority:
+           - If DOI matches (case-insensitive), treat as same paper.
+           - Else if arxiv_id matches (case-insensitive), treat as same paper.
+           - Else if normalized title matches (lowercased, remove punctuation/whitespace), treat as same paper.
+           When merging duplicates, keep the most complete metadata (prefer non-null abstract, keep DOI if any, keep arxiv_id if any, keep the most recent publication_date).
+        3) Keep only items with publication year in [{{start_year}}, {{end_year}}].
+        4) Score preliminary topical relevance (0.0-1.0) favoring presence of these terms/stems in title/abstract: ["RLHF", "reinforcement learning from human feedback", "verifiable", "verification", "verified", "verifiable rewards", "reward model verification"].
+        5) Sort primarily by publication_date (newest first), secondarily by preliminary relevance (highest first).
+        6) Select between {{candidate_min}} and {{candidate_max}} items if available; if fewer exist, return all available.
+        Output ONLY a JSON array of objects with fields:
+        {
+          "title": string,
+          "authors": [string, ...],
+          "publication_date": "YYYY-MM-DD" or "YYYY",
+          "abstract": string or null,
+          "doi": string or null,
+          "arxiv_id": string or null,
+          "url": string
+        }
+        Do not include any other text.
+      save_as: "candidate_list"
+
+  - task:
+      name: "enrich_with_arxiv_and_score"
+      instruction: |
+        Enrich and score each paper in this JSON array: {{candidate_list}}.
+        For each paper (target total between {{candidate_min}} and {{candidate_max}}):
+        - If arxiv_id is present and abstract is non-null, reuse it and SKIP arxiv_search for that paper.
+        - Otherwise, attempt to find an exact arXiv entry using arxiv_search:
+          • Query: the paper's title; append the first author surname if available.
+          • Constrain to years {{start_year}}-{{end_year}} by filtering results after retrieval.
+          • Set num_results to {{arxiv_num_results}} (≤5).
+          • Choose the best match by case-insensitive title similarity (ignore punctuation) and author overlap.
+          • If a match is found, extract arxiv_id and full abstract from arXiv.
+        - Compose the final record for each paper with:
+          {
+            "title": string,
+            "authors": [string, ...],
+            "publication_date": "YYYY-MM-DD" or "YYYY",
+            "abstract": string (prefer arXiv abstract if found; otherwise use existing; if still missing, use empty string),
+            "arxiv_id_or_url": string (prefer "arXiv:ID" if found; else use url; if missing, use DOI URL if DOI available),
+            "doi": string or null,
+            "url": string or null,
+            "relevance_score": number between 0.0 and 1.0,
+            "relevance_notes": short string explaining why this paper matches "RLHF with Verifiable Rewards"
+          }
+        Relevance scoring guidance:
+        - Higher if title/abstract mention "RLHF" or "reinforcement learning from human feedback" AND "verifiable"/"verification"/"verified" AND "reward(s)" or "reward model".
+        - Slightly boost for 2026 over 2025, and for explicit evaluation/verification methods for reward models.
+        - Penalize if "verifiable" relates to unrelated domains (e.g., cryptographic proofs not about reward verification).
+        After processing all items, sort by:
+          1) publication_date (newest first),
+          2) relevance_score (highest first).
+        Return ONLY a JSON array of the final records described above. Do not include any other text.
+      save_as: "papers_structured"

@@ -1,0 +1,159 @@
+name: "ai_scientists"
+goal: "Complete TinyScientist workflow: Safety Check + Idea Generation + Paper Writing"
+
+# Main workflow config
+config:
+    model: "gpt-5.2"
+    max_tokens_per_step: 200000
+    max_tool_calls_per_step: 50
+    plan_revision_max_steps: 0
+
+parameters:
+  domain: "bioinformatics"
+  intent: "Develop generative models for de novo molecular design with desired pharmacological properties"
+  num_ideas: 1
+  output_dir: "${AGENTSPEX_RUN_SANDBOX_DIR_ABS}"
+  model: "gpt-5.2"
+  paper_format: "latex"
+  include_preliminary_results: false
+  memory_file: "${AGENTSPEX_RUN_SANDBOX_DIR_ABS}/writer/memory.json"
+  max_citation_workers: 3
+  # If true, use the cost-efficient writer workflow; otherwise use the standard writer workflow.
+  cost_efficient: false
+
+workflow:
+  # Step 1: Setup - Create unified output directory structure
+  - task:
+      name: "setup_environment"
+      instruction: |
+        Use fs_mkdir tool to create the unified output directory structure:
+        - {{output_dir}}
+        - {{output_dir}}/thinker
+        - {{output_dir}}/writer
+        
+        Use fs_write tool to save the configuration file:
+        - {{output_dir}}/config.txt with content:
+          domain={{domain}}
+          intent={{intent}}
+          num_ideas={{num_ideas}}
+          model={{model}}
+          paper_format={{paper_format}}
+          include_preliminary_results={{include_preliminary_results}}
+        
+        Return confirmation that all directories and files have been created and do not use any other tool except fs_mkdir and fs_write.
+      save_as: "setup_result"
+
+  # Step 2: Call ai_scientists_thinker submodule (Safety Check + Idea Generation)
+  - call:
+      module: "thinker/ai_scientists_thinker.yaml"
+      parameters:
+        domain: "{{domain}}"
+        intent: "{{intent}}"
+        num_ideas: "{{num_ideas}}"
+        output_dir: "{{output_dir}}/thinker"
+        model: "{{model}}"
+      save_as: "thinker_result"
+      return: "prev_output"
+
+  # Step 3: Set idea_file_path for downstream Writer
+  - set_variable:
+      name: "idea_file_path"
+      value: "{{output_dir}}/thinker/step-2-final-ideas.json"
+
+  # Step 4: Check if idea generation was successful
+  - task:
+      name: "check_idea_generation"
+      instruction: |
+        Check if idea generation was successful.
+        
+        **CRITICAL REQUIREMENTS**:
+        - DO NOT save any extracted components or parsed data to files
+        - DO NOT create any intermediate files
+        - DO NOT modify the original idea file in any way
+        - Only read and verify the files, then return a status string
+        
+        Only read the idea file at {{idea_file_path}} using fs_read tool with max_bytes=10485760.
+        Use max_bytes=10485760 or omit the parameter to read the complete file.
+        
+        Parse the JSON in memory and verify it contains sufficient information for paper writing:
+        - A "Title" field (can be root-level or nested, e.g., "Title", "Idea.Title", "ideas[0].title")
+        - An "Approach" or "OriginalRefinedIdea.Approach" or "Idea.Approach" field describing the method
+        - Either a "Problem" field OR an "IdeaDetails.Description" OR "Idea.Problem" field that describes the problem being solved
+        
+        The JSON structure may vary, but as long as it contains:
+        - Title (required, can be nested)
+        - Approach or method description (required, can be nested)
+        - Problem description or idea description (required, can be nested)
+        
+        Then it is considered valid.
+        
+        Also check if safety check passed by reading:
+        {{output_dir}}/thinker/step-1-safety-check.json
+        Use max_bytes=1000 to read the safety check file.
+        
+        **IMPORTANT**: After reading and verifying, return ONLY a status string. Do NOT save any files.
+        
+        If the idea file is valid (contains Title, Approach/method, and Problem/description) and safety check passed, return "SUCCESS".
+        If the idea file is missing or invalid (missing required fields), return "FAILED: [reason]".
+        If safety check failed, return "FAILED: Safety check did not pass".
+      save_as: "idea_generation_status"
+
+  # Step 5: Conditional Paper Writing - Only if idea generation succeeded
+  - if:
+      condition: "idea_generation_status == 'SUCCESS'"
+      then:
+        # Step 5.1: Call Writer submodule (Paper Writing) based on cost_efficient
+        - if:
+            condition: "cost_efficient"
+            then:
+              - call:
+                  module: "writer/ai_scientists_writer_costefficiency.yaml"
+                  parameters:
+                    idea_file: "{{idea_file_path}}"
+                    output_dir: "{{output_dir}}/writer"
+                    paper_format: "{{paper_format}}"
+                    include_preliminary_results: "{{include_preliminary_results}}"
+                    memory_file: "{{memory_file}}"
+                    max_citation_workers: "{{max_citation_workers}}"
+                  save_as: "writer_result"
+                  return: "prev_output"
+            else:
+              - call:
+                  module: "writer/ai_scientists_writer.yaml"
+                  parameters:
+                    idea_file: "{{idea_file_path}}"
+                    output_dir: "{{output_dir}}/writer"
+                    paper_format: "{{paper_format}}"
+                    include_preliminary_results: "{{include_preliminary_results}}"
+                    memory_file: "{{memory_file}}"
+                    max_citation_workers: "{{max_citation_workers}}"
+                  save_as: "writer_result"
+                  return: "prev_output"
+
+        # Step 5.2: Refiner — iterative review-driven improvement
+        - call:
+            module: "demo/ai_scientists/refiner/ai_scientists_refiner.yaml"
+            parameters:
+              sections_dir: "{{output_dir}}/writer/sections"
+              output_dir: "{{output_dir}}/refiner"
+              human_feedback: "Shorten the title to be more concise (under 10 words). Improve LaTeX table formatting: replace \\hline with booktabs commands (\\toprule, \\midrule, \\bottomrule) and ensure column alignment is clean."
+            save_as: "refiner_result"
+            return: "prev_output"
+
+      else:
+        # Step 5.3: Skip paper writing if idea generation failed
+        - task:
+            name: "skip_paper_writing"
+            instruction: |
+              Idea generation failed or safety check did not pass. Skipping paper writing.
+              
+              Create a summary explaining why paper writing was skipped:
+              - Reason: {{idea_generation_status}}
+              - Idea file path: {{idea_file_path}}
+              - Safety check status: (read from {{output_dir}}/thinker/step-1-safety-check.json if available)
+              
+              **CRITICAL REQUIREMENT**: You MUST call fs_write tool to save this summary to:
+              {{output_dir}}/paper_writing_skipped.txt
+              
+              The file content MUST include the three bullet points above.
+            save_as: "skip_summary"

@@ -1,0 +1,16 @@
+[Unit]
+Description=AI Scientists Sandbox VM (Docker container)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=aiscientist
+WorkingDirectory=/home/aiscientist/controllable-sandbox
+ExecStart=/bin/bash scripts/run_vm.sh start
+ExecStop=/bin/bash scripts/run_vm.sh stop
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

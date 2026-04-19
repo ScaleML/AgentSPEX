@@ -1,0 +1,25 @@
+[Unit]
+Description=AI Scientists Flask Web UI
+After=sandbox-vm.service
+Requires=sandbox-vm.service
+
+[Service]
+Type=simple
+User=aiscientist
+WorkingDirectory=/home/aiscientist/controllable-sandbox
+
+# Cannot use "conda activate" in systemd — set PATH and CONDA_DEFAULT_ENV directly.
+# app.py line 440 checks CONDA_DEFAULT_ENV to wrap subprocess calls with conda run.
+Environment="PATH=/home/aiscientist/miniconda3/envs/yaml_agent/bin:/home/aiscientist/miniconda3/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="CONDA_DEFAULT_ENV=yaml_agent"
+Environment="HOME=/home/aiscientist"
+
+# Wait for MCP server (port 7002) to be ready before starting Flask
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do curl -sf http://localhost:7002/mcp > /dev/null 2>&1 && exit 0 || sleep 2; done; echo "WARNING: MCP not ready after 60s, starting anyway"'
+ExecStart=/home/aiscientist/miniconda3/envs/yaml_agent/bin/python demo/ai_scientists/web/app.py
+
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,261 @@
+name: "ai_scientists_refiner"
+goal: "Iteratively refine a generated proposal: review+format checks gate each iteration, Model A suggests improvements informed by review feedback and failing criteria, Model B applies edits per section."
+
+# Model X (this agent, GPT-5.2): pure orchestration — loop control, score comparison, file management.
+#   Does NOT read paper content. Does NOT generate suggestions. Does NOT edit text.
+# Model A (GPT-5.2): modules/get_suggestion.yaml — reads review JSON + failing criteria + all .tex, writes per-section suggestions.
+# Model B (GPT-5.2): modules/apply_suggestion.yaml — reads one .tex + one suggestion, writes modified file.
+# Review+Exit (GPT-5.2): modules/review_and_exit.yaml — compiles PDF, runs review API, checks format+content, decides STOP/CONTINUE.
+config:
+    model: "gpt-5.2"
+    max_tokens_per_step: 200000
+    max_tool_calls_per_step: 15
+    plan_revision_max_steps: 0
+
+parameters:
+    sections_dir: "${SECTIONS_DIR:-${AGENTSPEX_RUN_SANDBOX_DIR_ABS}/writer/sections}"
+    output_dir: "${REFINER_OUTPUT_DIR:-${AGENTSPEX_RUN_SANDBOX_DIR_ABS}/refiner}"
+    primearxiv_sty: "${PRIMEARXIV_STY:-/workspace/PRIMEarxiv.sty}"
+    min_score: "${MIN_SCORE:-5.6}"
+    min_refs: "${MIN_REFS:-20}"
+
+workflow:
+
+  # ── Step 1: Environment setup ────────────────────────────────────────────
+  # IMPORTANT: sections_dir is the ORIGINAL (read-only) source.
+  # All edits happen in working_dir = {{output_dir}}/working_sections.
+  - step:
+      name: "setup_refiner"
+      instruction: |
+        Set up the refiner environment. Run each command IN ORDER.
+
+        shell_run: sudo mkdir -p {{output_dir}}/iterations {{output_dir}}/tmp {{output_dir}}/suggestions {{output_dir}}/working_sections
+        shell_run: sudo chmod -R 777 {{output_dir}}
+
+        shell_run: command -v pdflatex && echo "pdflatex ready" || (sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y texlive-latex-base texlive-latex-recommended texlive-fonts-recommended texlive-science texlive-latex-extra && echo "pdflatex installed")
+
+        Copy original sections to working directory (originals will NEVER be modified):
+        shell_run: cp -r {{sections_dir}}/. {{output_dir}}/working_sections/
+        shell_run: sudo chmod -R o+w {{output_dir}}/working_sections
+
+        Save the original sections as iteration 0 baseline:
+        shell_run: mkdir -p {{output_dir}}/iterations/0/sections && cp -r {{sections_dir}}/. {{output_dir}}/iterations/0/sections/
+
+        fs_write {{output_dir}}/iteration_count.txt: 0
+        fs_write {{output_dir}}/best_total_score.txt: -1
+        fs_write {{output_dir}}/best_review_score.txt: -1
+
+        Return "SETUP_COMPLETE".
+
+  # ── Step 2: Search citation pool (before loop) ──────────────────────────
+  - call:
+      module: "demo/ai_scientists/refiner/modules/search_citations_pool.yaml"
+      parameters:
+        sections_dir: "{{output_dir}}/working_sections"
+        output_dir: "{{output_dir}}"
+        min_refs: "{{min_refs}}"
+      save_as: "citation_pool_result"
+
+  # ── Step 3: Initialize loop control ─────────────────────────────────────
+  - set_variable:
+      name: "keep_improving"
+      value: "True"
+
+  # ── Step 4: Iterative refinement loop ───────────────────────────────────
+  # Flow per iteration:
+  #   A: advance counter
+  #   B: review_and_exit → compile + review + format checks + exit decision
+  #   C: update best score tracking
+  #   D: if STOP → break (set keep_improving=False)
+  #   E: Model A → per-section suggestions (informed by review + failing criteria)
+  #   F-K: Model B calls (one per section + main.tex)
+  #   L: add references if needed
+  #   M: snapshot
+  - while:
+      condition: "keep_improving == True"
+      max_iterations: 1000
+      steps:
+
+        # ── 4-A: Advance iteration counter ────────────────────────────
+        - step:
+            name: "advance_counter"
+            instruction: |
+              fs_read {{output_dir}}/iteration_count.txt
+              Let N = (that value + 1). Use the actual integer, not "N".
+              fs_write {{output_dir}}/iteration_count.txt: N
+              shell_run: mkdir -p {{output_dir}}/iterations/N
+              Return N as a plain integer string (e.g. "1").
+            save_as: "current_n"
+
+        # ── 4-B: Review + format checks + exit decision ──────────────
+        - call:
+            module: "demo/ai_scientists/refiner/modules/review_and_exit.yaml"
+            parameters:
+              sections_dir: "{{output_dir}}/working_sections"
+              output_dir: "{{output_dir}}"
+              current_n: "{{current_n}}"
+              primearxiv_sty: "{{primearxiv_sty}}"
+              min_score: "{{min_score}}"
+            save_as: "exit_result"
+
+        # ── 4-C: Update best score tracking ───────────────────────────
+        - step:
+            name: "update_best"
+            instruction: |
+              N = {{current_n}}
+              Exit result: {{exit_result}}
+
+              Parse the exit_result JSON to extract total_score and review_score.
+              If exit_result contains "COMPILE_FAILED", set total_score=0, review_score=0.
+
+              fs_read {{output_dir}}/best_total_score.txt → BEST_TOTAL
+              Parse BEST_TOTAL as float.
+
+              Parse total_score from exit_result as float.
+
+              IF total_score > BEST_TOTAL:
+                fs_write {{output_dir}}/best_total_score.txt: <total_score>
+                fs_write {{output_dir}}/best_review_score.txt: <review_score>
+                fs_write {{output_dir}}/best_iteration.txt: N
+                shell_run: mkdir -p {{output_dir}}/best_sections && rm -rf {{output_dir}}/best_sections/* && cp -r {{output_dir}}/working_sections/. {{output_dir}}/best_sections/
+
+              Return "UPDATED" if best was updated, "KEPT" otherwise.
+            save_as: "best_update_result"
+
+        # ── 4-D: Check exit decision ──────────────────────────────────
+        - step:
+            name: "check_exit"
+            instruction: |
+              Exit result: {{exit_result}}
+
+              Parse the JSON and extract the "decision" field.
+
+              If decision is "STOP":
+                Return "False"
+
+              If decision is "CONTINUE":
+                Return "True"
+
+              CRITICAL: Return ONLY "True" or "False".
+            save_as: "keep_improving"
+
+        # ── 4-E: Model A — get suggestions ────────────────────────────
+        - step:
+            name: "extract_failing_criteria"
+            instruction: |
+              Exit result: {{exit_result}}
+
+              Parse the JSON and extract the "failing_criteria" array.
+              Return the array as a JSON string, e.g.:
+              ["TITLE_TOO_LONG: title has 13 words", "REFERENCES_TOO_FEW: only 5 references"]
+
+              If there are no failing criteria, return "none".
+            save_as: "failing_criteria"
+
+        - call:
+            module: "demo/ai_scientists/refiner/modules/get_suggestion.yaml"
+            parameters:
+              sections_dir: "{{output_dir}}/working_sections"
+              review_json: "{{output_dir}}/tmp/latest_review.json"
+              suggestions_dir: "{{output_dir}}/suggestions"
+              failing_criteria: "{{failing_criteria}}"
+            save_as: "suggestion_result"
+
+        # ── 4-F: Model B — apply suggestion to abstract ───────────────
+        - call:
+            module: "demo/ai_scientists/refiner/modules/apply_suggestion.yaml"
+            parameters:
+              target_file_path: "{{output_dir}}/working_sections/abstract.tex"
+              suggestion_file: "{{output_dir}}/suggestions/abstract.txt"
+            save_as: "apply_abstract_result"
+
+        # ── 4-G: Model B — apply suggestion to introduction ──────────
+        - call:
+            module: "demo/ai_scientists/refiner/modules/apply_suggestion.yaml"
+            parameters:
+              target_file_path: "{{output_dir}}/working_sections/introduction.tex"
+              suggestion_file: "{{output_dir}}/suggestions/introduction.txt"
+            save_as: "apply_introduction_result"
+
+        # ── 4-H: Model B — apply suggestion to method ────────────────
+        - call:
+            module: "demo/ai_scientists/refiner/modules/apply_suggestion.yaml"
+            parameters:
+              target_file_path: "{{output_dir}}/working_sections/method.tex"
+              suggestion_file: "{{output_dir}}/suggestions/method.txt"
+            save_as: "apply_method_result"
+
+        # ── 4-I: Model B — apply suggestion to experimental_setup ────
+        - call:
+            module: "demo/ai_scientists/refiner/modules/apply_suggestion.yaml"
+            parameters:
+              target_file_path: "{{output_dir}}/working_sections/experimental_setup.tex"
+              suggestion_file: "{{output_dir}}/suggestions/experimental_setup.txt"
+            save_as: "apply_experimental_setup_result"
+
+        # ── 4-J: Model B — apply suggestion to related_work ──────────
+        - call:
+            module: "demo/ai_scientists/refiner/modules/apply_suggestion.yaml"
+            parameters:
+              target_file_path: "{{output_dir}}/working_sections/related_work.tex"
+              suggestion_file: "{{output_dir}}/suggestions/related_work.txt"
+            save_as: "apply_related_work_result"
+
+        # ── 4-K: Model B — apply suggestion to main.tex (title etc.) ─
+        - call:
+            module: "demo/ai_scientists/refiner/modules/apply_suggestion.yaml"
+            parameters:
+              target_file_path: "{{output_dir}}/working_sections/main.tex"
+              suggestion_file: "{{output_dir}}/suggestions/main.txt"
+            save_as: "apply_main_result"
+
+        # ── 4-L: Add references if needed ─────────────────────────────
+        - call:
+            module: "demo/ai_scientists/refiner/modules/add_references.yaml"
+            parameters:
+              sections_dir: "{{output_dir}}/working_sections"
+              citation_pool_path: "{{output_dir}}/citation_pool.json"
+              min_refs: "{{min_refs}}"
+            save_as: "add_refs_result"
+
+        # ── 4-L2: Add figure if needed ───────────────────────────────
+        - call:
+            module: "demo/ai_scientists/refiner/modules/add_figure.yaml"
+            parameters:
+              sections_dir: "{{output_dir}}/working_sections"
+            save_as: "add_figure_result"
+
+        # ── 4-M: Snapshot current sections ────────────────────────────
+        - step:
+            name: "snapshot_sections"
+            instruction: |
+              N = {{current_n}}
+              shell_run: mkdir -p {{output_dir}}/iterations/N/sections && cp -r {{output_dir}}/working_sections/. {{output_dir}}/iterations/N/sections/
+
+              Archive suggestion files for this iteration, then clean up:
+              shell_run: mkdir -p {{output_dir}}/iterations/N/suggestions && cp {{output_dir}}/suggestions/*.txt {{output_dir}}/iterations/N/suggestions/ 2>/dev/null; rm -f {{output_dir}}/suggestions/*.txt
+
+              Return "SNAPSHOT_DONE"
+
+  # ── Step 5: Final compile and summary ───────────────────────────────────
+  - step:
+      name: "final_summary"
+      instruction: |
+        fs_read {{output_dir}}/best_total_score.txt → BEST_TOTAL
+        fs_read {{output_dir}}/best_review_score.txt → BEST_REVIEW
+        fs_read {{output_dir}}/best_iteration.txt → BEST_ITER (if exists, else "0")
+        fs_read {{output_dir}}/iteration_count.txt → TOTAL_N
+
+        Compile the best version as final PDF:
+        compile_pdf sections_dir="{{output_dir}}/best_sections" output_pdf="{{output_dir}}/final_proposal.pdf" primearxiv_sty="{{primearxiv_sty}}"
+
+        Return:
+          REFINER COMPLETE
+          Total iterations: <TOTAL_N>
+          Best total score: <BEST_TOTAL>
+          Best review score: <BEST_REVIEW>
+          Best iteration: <BEST_ITER>
+          Best sections: {{output_dir}}/best_sections/
+          Final PDF: {{output_dir}}/final_proposal.pdf
+          All iteration snapshots: {{output_dir}}/iterations/
+          Original sections unchanged: {{sections_dir}}

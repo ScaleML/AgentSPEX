@@ -1,0 +1,506 @@
+name: "ai_scientists_thinker_fast"
+goal: "Generate research ideas quickly in bioinformatics domain using simplified Thinker workflow (no safety check, no refinement, no novelty check, no scoring)"
+
+# Thinker submodule config
+config:
+    model: "gpt-5.2"
+    max_tokens_per_step: 100000
+    max_tool_calls_per_step: 30
+    plan_revision_max_steps: 0
+
+parameters:
+  domain: "${DOMAIN:-bioinformatics}"
+  intent: "${INTENT:-Develop novel machine learning methods for analyzing genomic sequences to predict protein-protein interactions in bioinformatics}"
+  num_ideas: "${NUM_IDEAS:-1}"
+  # Defaults to the per-run sandbox dir; parent workflows may override via env.
+  output_dir: "${OUTPUT_DIR:-${AGENTSPEX_RUN_SANDBOX_DIR_ABS}}"
+  model: "${MODEL:-gpt-5.2}"
+
+workflow:
+  # Step 1: Setup - Create output directory and save intent
+  - task:
+      name: "setup_environment"
+      instruction: |
+        Use fs_mkdir tool to create the output directory at {{output_dir}} if it doesn't exist.
+        
+        IMPORTANT: If the directory already exists but you encounter permission errors when writing files, 
+        try creating a subdirectory or use the exact path specified in {{output_dir}}.
+        The system will automatically create outputs/{{task_name}}/ directory for agent_run.log, 
+        so ensure {{output_dir}} matches this path to avoid duplicate directories.
+        
+        **CRITICAL - EXACT FILE PATHS TO USE (READ CAREFULLY)**:
+        The output_dir variable is: {{output_dir}}
+        
+        **EXACT PATHS TO USE** (use these EXACT paths, copy them exactly):
+        - {{output_dir}}/intent.txt
+        - {{output_dir}}/domain.txt
+        - {{output_dir}}/config.txt
+        
+        **CRITICAL PATH REQUIREMENTS**:
+        - The paths above are the COMPLETE, ABSOLUTE paths you must use
+        - DO NOT use any path other than the EXACT paths shown above
+        - The system message may mention a workspace directory, but you MUST ignore that and use the EXACT paths shown above
+        - Copy the paths EXACTLY as shown above
+        
+        Then use fs_write tool to save the following files:
+        1. {{output_dir}}/intent.txt with content: {{intent}}
+        2. {{output_dir}}/domain.txt with content: {{domain}}
+        3. {{output_dir}}/config.txt with content: model={{model}}, num_ideas={{num_ideas}}
+        
+        Return confirmation that all files have been created.
+      save_as: "setup_result"
+
+  # Step 2.1: Generate Search Queries
+  - task:
+      name: "thinker_generate_search_query"
+      instruction: |
+        Generate a search query for finding related papers for a research intent.
+        
+        You are an ambitious AI PhD student who is looking to publish a paper that will contribute significantly to the field.
+        You want to generate creative and impactful research ideas that can be feasibly investigated with the code provided.
+        Be critical and realistic in your assessments.
+        
+        Based on the following research intent:
+        
+        ```
+        {{intent}}
+        ```
+        
+        **YOUR TASK**: Analyze the intent above to identify KEY FOCUS AREAS and extract 1-2 CORE KEYWORDS to create a search query.
+        
+        **CRITICAL ANALYSIS PROCESS**:
+        1. **READ the intent carefully** and identify the MAIN GOAL/TASK (e.g., "predict protein-protein interactions", "analyze genomic sequences", "classify text")
+        2. **IDENTIFY the CORE METHOD/TECHNIQUE** (e.g., "machine learning methods", "deep learning", "neural networks", "graph neural network")
+        3. **IGNORE non-essential words**: Skip words like "novel", "develop", "for analyzing", "in bioinformatics", "to", "with", etc. - these are just connectors/modifiers
+        4. **EXTRACT the ESSENTIAL CONCEPTS**: Focus on WHAT is being done (the task) and HOW it's being done (the method)
+        5. **COMBINE with AND**: If you identified both a task and a method, combine them: "method AND task"
+        6. DO NOT use examples below - they are just to show the FORMAT, not content to copy!
+        
+        **EXAMPLE ANALYSIS**:
+        Intent: "Develop novel machine learning methods for analyzing genomic sequences to predict protein-protein interactions in bioinformatics"
+        - **Core Task**: "predict protein-protein interactions" (the main goal)
+        - **Core Method**: "machine learning methods" (the approach)
+        - **Ignore**: "develop", "novel", "for analyzing", "genomic sequences", "in bioinformatics" (modifiers/context)
+        - **Query**: "machine learning AND protein-protein interactions" (or "protein-protein interactions AND machine learning")
+        
+        **ANOTHER EXAMPLE**:
+        Intent: "Use graph neural networks to improve link prediction in knowledge graphs"
+        - **Core Task**: "link prediction" (the main goal)
+        - **Core Method**: "graph neural networks" (the approach)
+        - **Ignore**: "use", "to improve", "in knowledge graphs" (modifiers/context)
+        - **Query**: "graph neural network AND link prediction"
+        
+        **WHAT TO EXTRACT - KEY FOCUS AREAS**:
+        ✅ **Core Tasks/Goals**: "predict protein-protein interactions", "classify images", "generate molecules", "analyze sequences"
+        ✅ **Core Methods/Techniques**: "machine learning", "graph neural network", "transformer", "diffusion model", "knowledge distillation"
+        ✅ **Core Domains** (only if essential): "genomic sequences", "protein", "molecular design" (only if it's a core part of the task)
+        
+        **WHAT TO IGNORE - NON-ESSENTIAL WORDS**:
+        ❌ Action verbs: "develop", "create", "build", "design", "improve", "enhance"
+        ❌ Modifiers: "novel", "new", "advanced", "sophisticated", "effective"
+        ❌ Connectors: "for", "to", "with", "using", "by", "in", "on"
+        ❌ Context words: "in bioinformatics", "for drug discovery", "in NLP" (unless the domain is the core focus)
+        ❌ Generic terms: "methods", "approaches", "techniques" (too vague - use specific method names)
+        ❌ Vague goals: "improve performance", "better results", "optimize"
+        
+        **FORMAT EXAMPLES** (showing analysis process, NOT content to copy):
+        - Intent: "Develop novel machine learning methods for analyzing genomic sequences to predict protein-protein interactions in bioinformatics"
+          → Analysis: Core task = "predict protein-protein interactions", Core method = "machine learning"
+          → Query: "machine learning AND protein-protein interactions"
+        
+        - Intent: "Use graph neural networks to improve link prediction in knowledge graphs"
+          → Analysis: Core task = "link prediction", Core method = "graph neural networks"
+          → Query: "graph neural network AND link prediction"
+        
+        - Intent: "Apply knowledge distillation techniques to compress BERT models for efficient deployment"
+          → Analysis: Core method = "knowledge distillation", Core model = "BERT"
+          → Query: "knowledge distillation AND BERT"
+        
+        - Intent: "Design diffusion models for de novo molecular generation with synthetic feasibility constraints"
+          → Analysis: Core method = "diffusion model", Core task = "molecular generation"
+          → Query: "diffusion model AND molecular generation"
+        
+        **REMEMBER**: 
+        - Analyze the intent to find the MAIN GOAL (what) and MAIN METHOD (how)
+        - Ignore all modifiers, connectors, and context words
+        - Extract terms FROM THE INTENT above, not from these examples!
+        
+        Respond in the following format:
+        
+        RESPONSE:
+        ```json
+        <JSON>
+        ```
+        
+        In <JSON>, respond in JSON format with ONLY the following field:
+        - "Query": The query you just generated (3-5 concepts, use AND/OR strategically)
+        
+        **CRITICAL JSON FORMAT**:
+        - Do NOT use quotes around individual terms inside the Query value
+        - CORRECT: {"Query": "causal graph AND graph neural networks"}
+        - WRONG: {"Query": "\"causal graph\" AND \"graph neural networks\""}"
+        
+        Extract the Query from the JSON response and save it for the next step.
+        
+        **CRITICAL - EXACT FILE PATH TO USE (READ CAREFULLY)**:
+        The output_dir variable is: {{output_dir}}
+        
+        **EXACT PATH TO USE** (use this EXACT path, copy it exactly):
+        {{output_dir}}/step-2.1-thinker_generate_search_query.json
+        
+        **CRITICAL PATH REQUIREMENTS**:
+        - The path above is the COMPLETE, ABSOLUTE path you must use
+        - DO NOT use any path other than the EXACT path shown above
+        - The system message may mention a workspace directory, but you MUST ignore that and use the EXACT path shown above
+        - Copy the path EXACTLY as shown above
+        
+        IMPORTANT: Use fs_write tool to save the search query JSON to {{output_dir}}/step-2.1-thinker_generate_search_query.json.
+        The file should contain the JSON response with the "Query" field.
+      save_as: "search_query"
+
+  # Step 2.2: [MCP Tool Call] Search Related Works
+  - task:
+      name: "thinker_search_related_works"
+      instruction: |
+        Search for related papers using the search query from the previous step.
+        
+        **CRITICAL - USE CONTEXT VARIABLE**:
+        - Use the Search Query shown below directly - DO NOT use fs_read to read files
+        - Extract the "Query" value from the Search Query shown below to use in paper_search tool
+        
+        Search Query (from previous step):
+        {{search_query}}
+        
+        Use paper_search tool (from research category) to search for papers:
+        - query: (extract the "Query" value from the search_query variable shown above)
+        - result_limit: 5
+        - engine: "openalex"
+        
+        **CRITICAL - CORRECT TOOL CALL FORMAT (paper_search)**:
+        - When you call the tool, you MUST pass a JSON object with a TOP-LEVEL "query" field.
+        - "query" is REQUIRED. Never call paper_search with {}.
+        - DO NOT wrap arguments inside {"recipient_name": "...", "parameters": {...}}.
+        - Correct example tool call arguments:
+          {"query": "molecular generation AND diffusion model", "result_limit": 5, "engine": "openalex"}
+        - Optional fields you may include: "result_limit", "engine", "s2_api_key".
+        
+        The paper_search tool will return a result dictionary/object with papers and other information.
+        
+        **CRITICAL - MUST SAVE SEARCH RESULTS**:
+        **CRITICAL - EXACT FILE PATH TO USE (READ CAREFULLY)**:
+        The output_dir variable is: {{output_dir}}
+        
+        **EXACT PATH TO USE** (use this EXACT path, copy it exactly):
+        {{output_dir}}/step-2.2-thinker_search_related_works.txt
+        
+        **CRITICAL PATH REQUIREMENTS**:
+        - The path above is the COMPLETE, ABSOLUTE path you must use
+        - DO NOT use any path other than the EXACT path shown above
+        - The system message may mention a workspace directory, but you MUST ignore that and use the EXACT path shown above
+        - Copy the path EXACTLY as shown above
+        
+        - **MUST SAVE TO FILE**: After calling paper_search, you MUST extract the "papers" array from the tool result and save it as a text file using fs_write tool.
+          * Extract ONLY the "papers" array from the paper_search result (each paper object contains: title, abstract, authors, venue, year, citationCount).
+          * Create a JSON object: {"papers": [...]} where [...] is the papers array.
+          * **CRITICAL**: The content parameter for fs_write MUST be a TEXT STRING containing the JSON content, NOT a Python dict or list.
+          * **CRITICAL**: Save as TEXT file (mode="text") to: {{output_dir}}/step-2.2-thinker_search_related_works.txt
+          * If there are no papers, save: {"papers": []}
+          * This is REQUIRED - you MUST call fs_write to save the search results.
+        - **CRITICAL - SAVE TO CONTEXT**: 
+          * After calling paper_search tool and saving the file, you MUST return ONLY the "papers" array from the paper_search tool result in your response.
+          * **CRITICAL**: Do NOT return the query JSON. Do NOT return the complete paper_search result with "ok", "formatted_string", "query", "engine", "num_results".
+          * **CRITICAL**: Return ONLY the papers array in JSON format: {"papers": [...]} where [...] is the papers array from the tool result.
+          * The papers array will be automatically saved to the context variable "related_works".
+          * DO NOT use fs_list to check directory contents
+        - **CRITICAL**: You MUST complete BOTH steps: (1) Call paper_search tool, (2) Save the papers array to file using fs_write. Do NOT skip either step.
+        - **CRITICAL**: In your final response, return ONLY {"papers": [...]} (not the query JSON, not the complete tool result), so it gets saved to related_works.
+        - Do NOT use fs_write tool to save step-*-output.txt files (these are automatically saved by the system).
+      save_as: "related_works"
+
+  # Step 2.2.5: Log step done to avoid long text output carry-over
+  - task:
+      name: "thinker_search_related_works_done"
+      instruction: |
+        **CRITICAL - NO FILE OPERATIONS ALLOWED**:
+        This is a logging step only. You MUST NOT use fs_write, fs_read, fs_mkdir, or any other file operations.
+        
+        **REQUIRED ACTION**:
+        Simply return a brief confirmation message: "Related works search is done."
+        
+        **FORBIDDEN ACTIONS**:
+        - DO NOT use fs_write to save any files
+        - DO NOT use fs_read to read any files
+        - DO NOT use fs_mkdir to create directories
+        - DO NOT provide detailed status reports or file listings
+        - DO NOT save intermediate results or summaries
+        
+        **ONLY RETURN**: "Related works search is done."
+
+  # Step 2.3: Idea Generation (Initial Draft)
+  - task:
+      name: "thinker_generate_initial_idea"
+      instruction: |
+        Generate an initial research idea based on the intent and related works.
+        
+        **CRITICAL - USE CONTEXT VARIABLES**:
+        - Use the Related works shown below directly - DO NOT use fs_read to read files
+        
+        You are an ambitious AI PhD student who is looking to publish a paper that will contribute significantly to the field.
+        You want to generate creative and impactful research ideas that can be feasibly investigated with the code provided.
+        Be critical and realistic in your assessments.
+        
+        Generate a **creative and impactful research idea** based on the intent and related works:
+        ```
+        {{intent}}
+        ```
+        
+        Related works:
+        ```
+        {{related_works}}
+        ```
+        
+        **CRITICAL REQUIREMENT - MUST GENERATE IDEA**:
+        - **EVEN IF NO PAPERS WERE FOUND** in the related works search, you MUST still generate a complete research idea based on the user intent provided above
+        - If related works are empty or minimal, use your knowledge of the field and the intent to create a novel research idea
+        - The intent is the PRIMARY source - use it to guide idea generation regardless of search results
+        - DO NOT return empty or placeholder values - always generate a complete, valid idea JSON
+        
+        Please make sure the following requirements are kept:
+        1. **Problem**
+          * The problem should be a precise, not too large and not ambiguous problem.
+          * Think from demand: what are the attractive/necessary demands from the research community that have not been fully satisfied?
+          * A question that can be answered with yes/no + some reason. For example, Can LLM do well on NER task?
+        2. **Importance**
+          * Explain why the problem matters and is interesting.
+          * Use recent literature to support your points.
+          * Relate to the community consensus/trend to show your importance. We point out the gap/potential/opportunities between our idea and the current consensus.
+          * Recent example: Scalable LLM ranker? Graph based ranker
+        3. **Difficulty**
+          * Explain why the problem is technically challenging and why simple methods fail.
+          * Cite prior works that highlight these challenges.
+          * List 2-4 reason why this is very challenging. List with (1) (2) (3)
+        4. **NoveltyComparison**
+          * Write a **detailed comparison (≥150 words)** explaining how your idea differs from existing work.
+          * Discuss related works, their approaches, and limitations. Analyze your prior work's limitations, and argue that yours is better
+          * Explain why past methods don't fully solve the problem and what's new about yours.
+          * Prove your novelty. No one has solved XYZ, but we did. These limitations can be perfectly solved after our paper.
+        5. **Approach**
+          * Describe the **core algorithm/mechanism** of your proposed method.
+          * Need to explain each point in the difficulty why our proposed method can solve them. List explanation for each point in the difficulty
+          * Focus on your novel component, not standard preprocessing or ethics.
+          * IMPORTANT! You need to make sure that your proposed method can solve the problem you propose. Need to include the reason why such method can solve.
+        
+        
+        The output should be this format:
+        ```json
+        {
+          "Name": "...",
+          "Title": "...",
+          "Description": "...",
+          "Problem": "...",
+          "Importance": "...",
+          "Difficulty": "...",
+          "NoveltyComparison": "...",
+          "Approach": "...",
+          "is_experimental": true,
+          "Interestingness": 1-10,
+          "Feasibility": 1-10,
+          "Novelty": 1-10,
+          "IntentAlignment": 1-10,
+          "Score": 1-10
+        }
+        ```"
+        
+        Extract the JSON idea from the response (it should be wrapped in ```json ... ``` markers).
+        Save the idea JSON for the next step.
+        
+        **CRITICAL - EXACT FILE PATH TO USE (READ CAREFULLY)**:
+        The output_dir variable is: {{output_dir}}
+        
+        **EXACT PATH TO USE** (use this EXACT path, copy it exactly):
+        {{output_dir}}/step-2.3-thinker_generate_initial_idea.json
+        
+        **CRITICAL PATH REQUIREMENTS**:
+        - The path above is the COMPLETE, ABSOLUTE path you must use
+        - DO NOT use any path other than the EXACT path shown above
+        - The system message may mention a workspace directory, but you MUST ignore that and use the EXACT path shown above
+        - Copy the path EXACTLY as shown above
+        
+        IMPORTANT: Use fs_write tool to save the initial idea JSON to {{output_dir}}/step-2.3-thinker_generate_initial_idea.json.
+        The file should contain the complete idea JSON with all fields (Name, Title, Description, Problem, Importance, Difficulty, NoveltyComparison, Approach, etc.).
+      save_as: "initial_idea"
+
+  # Step 2.3.5: Log step done to avoid long text output carry-over
+  - task:
+      name: "thinker_generate_initial_idea_done"
+      instruction: |
+        **CRITICAL - NO FILE OPERATIONS ALLOWED**:
+        This is a logging step only. You MUST NOT use fs_write, fs_read, fs_mkdir, or any other file operations.
+        
+        **REQUIRED ACTION**:
+        Simply return a brief confirmation message: "Initial idea draft is done."
+        
+        **FORBIDDEN ACTIONS**:
+        - DO NOT use fs_write to save any files
+        - DO NOT use fs_read to read any files
+        - DO NOT use fs_mkdir to create directories
+        - DO NOT provide detailed status reports or file listings
+        - DO NOT save intermediate results or summaries
+        
+        **ONLY RETURN**: "Initial idea draft is done."
+
+  # Step 2.7: Generate Experiment Plan (Part 1 - Generate only)
+  - task:
+      name: "thinker_generate_experiment_plan"
+      instruction: |
+        **CRITICAL - NO FILE OPERATIONS ALLOWED**:
+        This step is for generating the experiment plan JSON only. You MUST NOT use fs_write, fs_read, fs_mkdir, or any other file operations.
+        DO NOT save any files. Only return the experiment plan JSON.
+        
+        **CRITICAL**: Use the initial idea directly from context variable initial_idea. DO NOT use fs_read to read files - the idea is already available in context and shown below.
+             
+        Given the following research idea:
+
+        Initial Idea:
+        ```
+        {{initial_idea}}
+        ```
+
+        And the ORIGINAL INTENT:
+        ```
+        {{intent}}
+        ```
+
+        **CRITICAL REQUIREMENT - COMPLETE EXPERIMENT PLAN**:
+        - **EVEN IF Initial Idea is incomplete or lacks details**, you MUST generate a complete experiment plan
+        - If the Initial Idea's "Approach" section is insufficient or vague, use the ORIGINAL INTENT above to infer and complete the missing information
+        - The experiment plan MUST be complete with all 6 REQUIRED fields (Model, Dataset, Baselines, Training, Evaluation, Hyperparameters)
+        - Use your knowledge of the research domain and the user intent to fill in reasonable, appropriate details for any missing information
+        - DO NOT leave fields empty or use placeholder values - always provide concrete, realistic values
+        
+        Develop a **simplified** experimental plan as a JSON object. The experiment plan MUST directly implement the core algorithm described in the Idea's "Approach" section (or infer from the intent if Approach is insufficient).
+        
+        **CRITICAL - SIMPLIFIED FORMAT FOR FAST WORKFLOW**:
+        This experiment plan will be used to write a proposal abstract. Keep it concise and focused on essential information only.
+        DO NOT include excessive detail - focus on what's needed for a high-level abstract description.
+        
+        Respond in the following format:
+        
+        EXPERIMENT PLAN JSON:
+        ```json
+        <JSON>
+        ```
+        
+        In <JSON>, provide the plan in JSON format. The JSON MUST include these 6 REQUIRED fields with SIMPLIFIED structure:
+        
+        **REQUIRED FIELDS** (simplified structure):
+        1. "Model": Object with ONLY:
+           - "Name": string (model name)
+           - "Components": array of strings (main components, e.g., ["Encoder", "Decoder", "Predictor"])
+           - DO NOT include detailed Architecture, TotalParameters, or other complex nested structures
+        
+        2. "Dataset": Object with ONLY:
+           - "Name": string (dataset name)
+           - "Size": string or number (e.g., "1M samples" or 1000000)
+           - "Splits": object with "Train", "Validation", "Test" percentages (e.g., {"Train": "70%", "Validation": "15%", "Test": "15%"})
+           - DO NOT include Load_Command, Preprocessing, GraphRepresentation, DataAugmentation, or other detailed fields
+        
+        3. "Baselines": Array of objects, each with ONLY:
+           - "Name": string (baseline name)
+           - "Description": string (one-sentence description)
+           - DO NOT include Metrics or other detailed fields
+        
+        4. "Training": Object with ONLY:
+           - "Optimizer": string (e.g., "AdamW")
+           - "LearningRate": number (e.g., 0.0001)
+           - "BatchSize": number (e.g., 256)
+           - "Epochs": number (e.g., 50)
+           - DO NOT include Hardware, Losses, DiffusionSchedule, ActiveLearning, or other detailed fields
+        
+        5. "Evaluation": Object with ONLY:
+           - "Metrics": array of strings (e.g., ["Accuracy", "F1", "AUROC"])
+           - "Strategy": string (brief description, e.g., "Hold-out test set with cross-validation")
+           - DO NOT include Reproducibility, ValidationStrategy, or other detailed fields
+        
+        6. "Hyperparameters": Object with ONLY key hyperparameters as simple key-value pairs:
+           - Use simple values or arrays (e.g., {"LearningRate": [0.0001, 0.0002], "BatchSize": [128, 256]})
+           - DO NOT include nested structures or excessive detail
+           - Limit to 3-5 most important hyperparameters only
+        
+        **DO NOT INCLUDE**:
+        - References
+        - Extensions
+        - Detailed architecture descriptions
+        - Complex nested structures
+        - Implementation details
+        
+        **CRITICAL JSON FORMAT REQUIREMENTS**:
+        - Absolutely NO comments (`//` or `/* */`) inside JSON values
+        - Ensure all braces {} are properly closed
+        - The JSON must be valid and complete
+        - Return ONLY the JSON object (wrapped in ```json ... ```), nothing else
+        
+        **IMPORTANT**: Pay attention to JSON format - ensure all braces {} are properly closed, all quotes are properly escaped, and the JSON is complete and valid.
+      save_as: "experiment_plan"
+
+  # Step 2.8: Save Final Ideas with Experiment Plan (Part 2 - Save only)
+  - task:
+      name: "thinker_save_final_ideas"
+      instruction: |
+        **CRITICAL - FILE SAVE OPERATION ONLY**:
+        This step is ONLY for saving the final idea file. You MUST use fs_write tool to save the file.
+        
+        **EXACT PATH TO USE** (use this EXACT path, copy it exactly):
+        {{output_dir}}/step-2-final-ideas.json
+        
+        **CRITICAL PATH REQUIREMENTS**:
+        - The path above is the COMPLETE, ABSOLUTE path you must use
+        - DO NOT use any path other than the EXACT path shown above
+        - The system message may mention a workspace directory, but you MUST ignore that and use the EXACT path shown above
+        - Copy the path EXACTLY as shown above
+        
+        **CONTENT TO SAVE**:
+        You need to combine the initial idea (from context variable initial_idea) with the experiment plan (from context variable experiment_plan) into a single JSON object.
+        
+        **CRITICAL - USE THE ACTUAL CONTENT BELOW**:
+        - Use the Initial Idea shown below EXACTLY as-is - DO NOT modify, regenerate, or create new content
+        - Use the Experiment Plan shown below EXACTLY as-is - DO NOT modify or regenerate it
+        
+        Initial Idea (use this EXACT content):
+        {{initial_idea}}
+        
+        Experiment Plan (use this EXACT content):
+        {{experiment_plan}}
+        
+        **YOUR TASK**:
+        1. Extract the JSON from initial_idea (it may be wrapped in ```json ... ``` markers - extract only the JSON object)
+        2. Extract the JSON from experiment_plan (it may be wrapped in ```json ... ``` markers - extract only the JSON object)
+        3. Combine them into a single JSON object where:
+           - All fields from initial_idea are preserved EXACTLY (Name, Title, Description, Problem, Importance, Difficulty, NoveltyComparison, Approach, is_experimental, Interestingness, Feasibility, Novelty, IntentAlignment, Score)
+           - Add a new field "Experiment" containing the experiment_plan JSON object
+        
+        **CRITICAL REQUIREMENTS**:
+        - DO NOT change any field values from initial_idea - use them EXACTLY as shown above
+        - DO NOT regenerate or create new content - only combine the existing JSON objects
+        - The content parameter for fs_write MUST be a complete, valid JSON string
+        - You MUST generate the COMPLETE JSON string - do NOT truncate or cut off the JSON
+        - Ensure the JSON string is properly formatted with all braces {} closed, all quotes escaped, and all fields complete
+        - The content parameter for fs_write MUST be a TEXT STRING containing valid JSON, NOT a Python dict or list
+        
+        **EXECUTION STEPS**:
+        1. Extract the JSON objects from initial_idea and experiment_plan (remove ```json markers if present)
+        2. Combine them: take all fields from initial_idea JSON, add "Experiment" field with experiment_plan JSON
+        3. Call fs_write tool with:
+           - path: {{output_dir}}/step-2-final-ideas.json
+           - content: (the complete combined JSON as a text string)
+           - mode: "text"
+        4. Return ONLY: "File saved: {{output_dir}}/step-2-final-ideas.json"
+        
+        **DO NOT**:
+        - Modify any field values from initial_idea
+        - Regenerate or create new idea content
+        - Use fs_read to read files
+        - Use fs_mkdir to create directories
+        - Ask for confirmation
+        - Provide explanations beyond the confirmation message
+      save_as: "save_final_ideas_result"

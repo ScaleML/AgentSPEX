@@ -1,0 +1,91 @@
+name: "write_experimental_setup_module"
+goal: "Write Experimental Setup section with complex LaTeX formulas using gpt-5.2 model"
+
+# Use gpt-5.2 for better LaTeX formula handling
+config:
+    model: "gpt-5.2"
+    max_tokens_per_step: 150000
+    max_tool_calls_per_step: 30
+    plan_revision_max_steps: 0
+
+# Parameters from parent workflow
+parameters:
+    # NOTE: Parent workflow passes params via env vars using UPPERCASE keys
+    write_system_prompt: "${WRITE_SYSTEM_PROMPT}"
+    idea_data: "${IDEA_DATA}"
+    experimental_setup_tips: "${EXPERIMENTAL_SETUP_TIPS}"
+    related_work_draft: "${RELATED_WORK_DRAFT}"
+    enriched_introduction_draft: "${ENRICHED_INTRODUCTION_DRAFT}"
+    method_draft: "${METHOD_DRAFT}"
+
+workflow:
+    # Write Experimental Setup section
+    - task:
+        name: "write_experimental_setup"
+        instruction: |
+            **CRITICAL - NO FILE OPERATIONS ALLOWED**:
+            This step is for writing content only. You MUST NOT use fs_write, fs_read, fs_mkdir, or any other file operations.
+            DO NOT save any files. DO NOT create any directories. Only return the written content.
+            
+            {{write_system_prompt}}
+
+            Please fill in the Experimental Setup section of the writeup. This section should **clearly document how the experiments were conducted** so that they can be replicated by other researchers.
+
+            **THE RESEARCH IDEA (Focus on "Proposed Approach" and "Experiment Plan" sections)**:
+            {{idea_data}}
+            
+            **CRITICAL - DO NOT CITE FROM THE RESEARCH IDEA**:
+            - The research idea text may contain reference-like strings or citation keys.
+            - You MUST NOT add citations based on anything mentioned inside the research idea text.
+            - Only cite papers whose citation keys already appear in the provided previous sections below.
+            - Never invent new citation keys.
+
+            Some tips are provided below:
+            {{experimental_setup_tips}}
+
+            **IMPORTANT**: You have access to the previous sections that were already written. Make sure your Experimental Setup section clearly connects to the method introduced earlier and provides specific implementation details that follow logically from the proposed approach.
+
+            **NOTE**: This is a proposal paper. Focus on describing the experimental setup and plan, NOT results. Include:
+            - Dataset description and selection rationale
+            - Evaluation metrics and protocols
+            - Important hyperparameters and training details
+            - Implementation details
+            - Experimental plan (what experiments will be conducted)
+
+            **Previous content:**
+            \section{Related Work}
+            {{related_work_draft}}
+
+            \section{Introduction}
+            {{enriched_introduction_draft}}
+
+            \section{Method}
+            {{method_draft}}
+
+            Be sure to use \cite or \citet where relevant, referring to the works provided in the file.
+            Do not cite anything that is not already in `references.bib`. Do not add any new entries to this.
+
+            **Citation Usage**: Each citation must support a specific claim in that sentence (e.g., cite datasets when referencing them, cite papers when using their evaluation metrics or experimental protocols).
+
+            In this pass, do not reference anything in later sections of the paper.
+
+            **CRITICAL - LaTeX Math Format**:
+            - For inline math, use $...$
+            - For display math, use \begin{equation}...\end{equation}
+            - For multi-line equations, use \begin{align}...\end{align}
+            - DO NOT use \\( or \\[ (double backslash) - these will be rendered as literal text. Example: \(x = y + z\) (correct) NOT \\(x = y + z\\) (wrong)
+            - DO NOT use literal \n for line breaks - use actual line breaks (press Enter)
+            
+            **CRITICAL - MATH MODE MUST BE CLOSED (PAY EXTRA ATTENTION)**:
+            - Any time you write mathematics, it MUST be inside math mode delimiters.
+            - Every `$` MUST have a matching closing `$` (never leave a dangling `$`).
+            - Before finishing, quickly scan to ensure there are NO unclosed `$` anywhere in the section.
+
+            Begin with:
+            \section{Experimental Setup}
+            \label{sec:experimental_setup}
+            ...
+        save_as: "experimental_setup_draft"
+    
+    - return: "experimental_setup_draft"
+

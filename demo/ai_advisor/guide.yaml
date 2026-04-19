@@ -1,0 +1,154 @@
+name: "GUIDE_fast_demo"
+goal: |
+  Complete research advising pipeline:
+  1. Process target paper (download, parse, chunk, store in memory)
+  2. Use target abstract to find related papers
+  3. Process all related papers in parallel
+  4. Synthesize and evaluate academic advising
+
+parameters:
+  arxiv_id: "${ARXIV_ID}"
+  target_dir: "${TARGET_DIR}"
+  target_memory_file: "${TARGET_MEMORY_FILE}"
+  related_dir: "${RELATED_DIR}"
+  related_memory_file: "${RELATED_MEMORY_FILE}"
+  results_dir: "${RESULTS_DIR}"
+  num_related_papers: "${NUM_RELATED_PAPERS:-5}"
+  comparison_file: "${COMPARISON_FILE}"
+
+workflow:
+  # ========== STEP 1: PROCESS TARGET PAPER ==========
+  # Step 1a: Parse PDF from arXiv
+  - call:
+      module: "modules/pdf_parser.yaml"
+      parameters:
+        arxiv_id: "{{arxiv_id}}"
+        target_dir: "{{target_dir}}"
+      save_as: "target_pdf_result"
+
+  # Step 1b: Chunk the parsed text
+  - call:
+      module: "modules/chunk_read.yaml"
+      parameters:
+        input_file: "{{target_dir}}/{{arxiv_id}}/{{arxiv_id}}.txt"
+        output_dir: "{{target_dir}}/{{arxiv_id}}/chunks"
+      save_as: "target_chunk_result"
+
+  # Step 1c: Process chunks and store in memory - returns consolidated summary
+  - call:
+      module: "modules/process_paper_chunked.yaml"
+      parameters:
+        chunk_dir: "{{target_dir}}/{{arxiv_id}}/chunks"
+        memory_file: "{{target_memory_file}}"
+        arxiv_id: "{{arxiv_id}}"
+      save_as: "target_paper_summary"
+
+  # ========== STEP 2: SEARCH FOR RELATED PAPERS ==========
+  - call:
+      module: "modules/search_related_papers.yaml"
+      parameters:
+        target_paper_summary: "{{target_paper_summary}}"
+        target_arxiv_id: "{{arxiv_id}}"
+        num_related_papers: "{{num_related_papers}}"
+      save_as: "related_paper_ids"
+
+  # ========== STEP 3: PROCESS ALL RELATED PAPERS SEQUENTIALLY ==========
+  - for_each:
+      variable: "paper_id"
+      in: "related_paper_ids"
+      steps:
+        # Step 3a: Parse PDF for this paper
+        - call:
+            module: "modules/pdf_parser.yaml"
+            parameters:
+              arxiv_id: "{{paper_id}}"
+              target_dir: "{{related_dir}}"
+            save_as: "pdf_result"
+
+        # Step 3b: Chunk the parsed text for this paper
+        - call:
+            module: "modules/chunk_read.yaml"
+            parameters:
+              input_file: "{{related_dir}}/{{paper_id}}/{{paper_id}}.txt"
+              output_dir: "{{related_dir}}/{{paper_id}}/chunks"
+            save_as: "chunk_result"
+
+        # Step 3c: Process chunks and store in memory - returns consolidated summary
+        - call:
+            module: "modules/process_paper_chunked.yaml"
+            parameters:
+              chunk_dir: "{{related_dir}}/{{paper_id}}/chunks"
+              memory_file: "{{related_memory_file}}"
+              arxiv_id: "{{paper_id}}"
+            save_as: "related_paper_summary"
+
+        # Step 3d: Generate comparison between related paper and target paper
+        - task:
+            name: "generate_comparison_{{paper_id}}"
+            instruction: |
+              Generate a comparison between the target paper and the related paper.
+              
+              You have access to:
+              1. Target paper summary: {{target_paper_summary}}
+              2. Related paper summary: {{related_paper_summary}}
+              
+              Both summaries contain: arxiv_id, abstract, contribution, method, and experiment fields.
+              
+              Write a comparison analysis (4-6 sentences) covering:
+              - How the approaches differ methodologically
+              - What unique contributions each paper makes
+              - Potential synergies or complementary aspects
+              - Key distinctions in focus or application
+              
+              Return ONLY JSON:
+              {
+                "comparison": "<your_comparison_text>"
+              }
+            save_as: "comparison"
+
+        # Step 3e: Store comparison in memory
+        - task:
+            name: "store_comparison_{{paper_id}}"
+            instruction: |
+              The comparison between target paper and related paper is {{comparison}}.
+              Store the comparison in memory, remember to replace the placeholder with the actual value.
+              - memory("store", key="comparison:{{arxiv_id}}:{{paper_id}}", content="<comparison_text>", tags="comparison,target:{{arxiv_id}},related:{{paper_id}}", memory_file="{{comparison_file}}")
+              
+              Return ONLY: "stored"
+            save_as: "comparison_stored"
+
+  # ========== STEP 4: SYNTHESIZE AND EVALUATE ADVISING ==========
+  - call:
+      module: "modules/synthesize_advising.yaml"
+      parameters:
+        topic: "{{arxiv_id}}"
+        results_dir: "{{results_dir}}"
+        target_summary: "{{target_paper_summary}}"
+        comparison_file: "{{comparison_file}}"
+      save_as: "advising_result"
+
+  # ========== FINAL OUTPUT ==========
+  - task:
+      name: "generate_final_output"
+      instruction: |
+        Create final report metadata:
+        {
+          "target_paper": {
+            "arxiv_id": "{{arxiv_id}}",
+            "directory": "{{target_dir}}",
+            "memory_file": "{{target_memory_file}}"
+          },
+          "related_papers": {
+            "arxiv_ids": {{related_paper_ids}},
+            "directory": "{{related_dir}}",
+            "memory_file": "{{related_memory_file}}"
+          },
+          "advising_markdown_file": "{{advising_result}}",
+          "comparison_file": "{{comparison_file}}",
+          "results_directory": "{{results_dir}}"
+        }
+        
+        Return ONLY this JSON.
+      save_as: "final_output"
+
+  - return: "final_output"

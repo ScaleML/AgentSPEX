@@ -1,0 +1,394 @@
+name: "ai_scientists_writer_fast"
+goal: "Generate a concise research proposal with brief sections (Abstract, Introduction, Related Work, Method, Experiment Plan) from research idea"
+
+# Writer Fast submodule config
+config:
+    model: "gpt-5.2"
+    max_tokens_per_step: 150000
+    max_tool_calls_per_step: 30
+    plan_revision_max_steps: 0
+
+parameters:
+    idea_file: "${IDEA_FILE:-${AGENTSPEX_RUN_SANDBOX_DIR_ABS}/thinker/step-2-final-ideas.json}"
+    # Defaults to the per-run sandbox dir; parent workflows override via env.
+    output_dir: "${OUTPUT_DIR:-${AGENTSPEX_RUN_SANDBOX_DIR_ABS}}"
+    paper_format: "${PAPER_FORMAT:-latex}"
+    latex_main_template: |
+        \documentclass{article}
+
+        \usepackage{PRIMEarxiv}
+
+        \usepackage[utf8]{inputenc} % allow utf-8 input
+
+        \usepackage[T1]{fontenc}    % use 8-bit T1 fonts
+
+        \usepackage{hyperref}       % hyperlinks
+
+        \usepackage{url}            % simple URL typesetting
+
+        \usepackage{microtype}      % microtypography
+
+        \usepackage{fancyhdr}       % header
+
+        \usepackage{graphicx}       % graphics
+
+        \graphicspath{{media/}}     % organize your images and other figures under media/ folder
+
+        %Header
+
+        \pagestyle{fancy}
+
+        \thispagestyle{empty}
+
+        \rhead{ \textit{ }} 
+
+        % Update your Headers here
+
+        \fancyhead[LO]{TITLE_PLACEHOLDER}
+
+        %% Title
+
+        \title{TITLE_PLACEHOLDER}
+
+        \author{
+          OptimalScale AIScientist
+        }
+
+        \begin{document}
+
+        \maketitle
+
+        \input{sections/abstract}
+
+        \input{sections/brief_introduction}
+
+        \input{sections/brief_related_work}
+
+        \input{sections/brief_method}
+
+        \input{sections/brief_experiment_plan}
+
+        \end{document}
+    write_system_prompt: |
+        Your current task to write a proposal aiming to publish a paper that will contribute significantly to the field.
+        You have already figured out the research idea and the experiments you want to run.
+
+        **CRITICAL - LaTeX Format Only (NO Markdown)**
+        - NEVER mix Markdown and LaTeX syntax (e.g., **text\textbf{ is WRONG)
+        - Use \textbf{text} for bold, NEVER **text**
+        - Use \textit{text} for italic, NEVER *text*
+        - Use \texttt{text} for code/monospace, NEVER `text`
+        - Example: \textbf{Data Collection}: not **Data Collection**: or **Data Collection\textbf{
+        - When including tables, always use proper LaTeX tabular format (not Markdown)
+        - Avoid using Markdown-style tables (e.g., those starting with `| Column |`) — they are not compatible with LaTeX rendering and will break the document
+
+        [LaTeX Formatting Reminder]
+        - **CRITICAL**: Always use `\%` for percentage values (e.g., 93\%), NEVER use bare `%` as it becomes a comment in LaTeX
+        - For actual LaTeX comments, use `% comment` (without backslash)
+        - Escape special characters by prefixing them with a backslash, `_` as `\_`, `&` as `\&`, `#` as `\#`, etc.
+    abstract_tips: |
+        - TL;DR of the proposal
+        - What are we trying to do and why is it relevant?
+        - Why is this hard?
+        - How do we solve it (i.e. our contribution!)
+        - How do we verify that we solved it (e.g. Experiments and results)
+
+        Please make sure the abstract reads smoothly and is well-motivated. This should be one continuous paragraph with no breaks between the lines. Keep it to 3-4 sentences that capture the essence.
+
+workflow:
+    # Step 1: Setup - Create output directory structure
+    - task:
+        name: "setup_environment"
+        instruction: |
+            Use fs_mkdir tool to create the following directory structure:
+            - {{output_dir}}/sections
+            - {{output_dir}}/figures (for future use)
+
+            Return confirmation that all directories have been created.
+        save_as: "setup_result"
+
+    # Step 2: Load Idea (as text, no JSON parsing required)
+    - task:
+        name: "load_idea"
+        instruction: |
+            **CRITICAL - SINGLE TOOL CALL ONLY**:
+            You MUST call fs_read tool ONCE and then immediately return the content.
+            DO NOT call fs_read multiple times.
+            DO NOT re-read the file after receiving the content.
+
+            Use fs_read tool to read the idea file at {{idea_file}}.
+
+            **CRITICAL**: Do NOT use max_bytes=0. Use max_bytes=10485760 or omit the parameter.
+
+            **CRITICAL - CHECK IF FILE WAS READ SUCCESSFULLY**:
+            After calling fs_read:
+            1. Check if the tool response indicates success (ok: true)
+            2. Check if the "text" field contains actual content (not empty, not null, not just whitespace)
+            3. If the file was NOT read successfully OR the content is empty/null/whitespace:
+               - Return EXACTLY: "EMPTY_IDEA"
+               - DO NOT proceed with any other operations
+            4. If the file was read successfully AND contains content:
+               - Return the entire file content as text (even if it's just whitespace or invalid JSON)
+               - DO NOT parse, extract, or reformat the content
+               - DO NOT validate JSON format
+               - Just return the complete text content that was read from the file
+
+            **EXECUTION STEPS** (execute in order):
+            1. Call fs_read tool with path: {{idea_file}}
+            2. Check the tool response:
+               - If ok: false OR text field is empty/null/whitespace:
+                 Return EXACTLY: "EMPTY_IDEA"
+               - If ok: true AND text field has content:
+                 Return the text content directly
+            3. DO NOT call any other tools after receiving the file content
+            4. DO NOT call fs_read again - you already have the content
+
+            **IMPORTANT**: The tool response will contain the file content in the "text" field. Extract that text and return it directly, OR return "EMPTY_IDEA" if the file is empty or unreadable.
+        save_as: "idea_data"
+
+    # Step 2.1: Conditional - Skip if idea load failed
+    - if:
+        condition: "idea_data == 'EMPTY_IDEA'"
+        then:
+          - task:
+              name: "skip_writing_due_to_failed_idea_load"
+              instruction: |
+                Idea file could not be loaded or is empty. Skipping paper writing.
+                
+                **CRITICAL REQUIREMENT**: You MUST call fs_write tool to save a failure summary to:
+                {{output_dir}}/paper_writing_skipped.txt
+                
+                The file content should be:
+                Idea file path: {{idea_file}}
+                Reason: Idea file is empty or could not be read
+                
+                After saving, return: "Paper writing skipped: Idea file could not be loaded"
+              save_as: "skip_writing_result"
+        else:
+          # Step 2.1: Logging step after load_idea (only if idea loaded successfully)
+          - task:
+              name: "load_idea_done"
+              instruction: |
+                  **CRITICAL - NO FILE OPERATIONS ALLOWED**:
+                  This is a logging step only. You MUST NOT use fs_write, fs_read, fs_mkdir, or any other file operations.
+                  
+                  **REQUIRED ACTION**:
+                  Simply return a brief confirmation message: "Idea data loaded successfully."
+                  
+                  **FORBIDDEN ACTIONS**:
+                  - DO NOT use fs_write to save any files
+                  - DO NOT use fs_read to read any files
+                  - DO NOT use fs_mkdir to create directories
+                  - DO NOT provide detailed status reports or file listings
+                  - DO NOT save intermediate results or summaries
+                  
+                  Return ONLY the confirmation message.
+              save_as: "load_idea_result"
+
+          # Step 2.2: Create main.tex with Title from idea_data (using LLM for string replacement)
+          # This step uses LLM to perform the string replacement to avoid eval() issues with multi-line strings
+          - task:
+              name: "create_main_tex_content"
+              instruction: |
+                  **CRITICAL - STRING REPLACEMENT TASK ONLY**:
+                  You must perform a simple string replacement: replace `TITLE_PLACEHOLDER` with the actual title.
+                  
+                  **INPUTS PROVIDED**:
+                  - LaTeX Template (contains `TITLE_PLACEHOLDER` in two places): {{latex_main_template}}
+                  
+                  - Research Idea: {{idea_data}}
+
+                  **TITLE EXTRACTION RULE (IMPORTANT)**:
+                  - Extract the paper title from the Research Idea shown above (look for the `Title` field / JSON key `"Title"`).
+                  - The actual title to insert is the extracted Title VALUE (plain text), NOT the literal string `idea_data`.
+                  
+                  **YOUR TASK**:
+                  1. Take the LaTeX template above
+                  2. Find ALL occurrences of the exact string `TITLE_PLACEHOLDER`
+                  3. Replace each `TITLE_PLACEHOLDER` with the extracted title text
+                  4. Return ONLY the complete modified LaTeX template (with Title inserted)
+                  
+                  
+                  **CRITICAL - OUTPUT REQUIREMENTS**:
+                  - Return ONLY the complete LaTeX template text
+                  - DO NOT include any explanations, comments, or additional text
+                  - DO NOT use any tools (fs_write, fs_read, fs_mkdir, etc.)
+                  - DO NOT modify any part of the template except replacing `TITLE_PLACEHOLDER`
+                  - DO NOT add or remove any lines
+                  - The output should be the exact same template, but with `TITLE_PLACEHOLDER` replaced by the title
+                  
+                  **EXAMPLE**:
+                  If the template contains:
+                  ```
+                  \fancyhead[LO]{TITLE_PLACEHOLDER}
+                  \title{TITLE_PLACEHOLDER}
+                  ```
+                  
+                  And the title is "My Research Title", then return:
+                  ```
+                  \fancyhead[LO]{My Research Title}
+                  \title{My Research Title}
+                  ```
+                  
+                  **NOW PERFORM THE REPLACEMENT AND RETURN THE COMPLETE TEMPLATE**:
+              save_as: "main_tex_content"
+          
+          # Step 2.3: Save main.tex file
+          - task:
+              name: "save_main_tex"
+              instruction: |
+                  **CRITICAL - ONLY ONE OPERATION ALLOWED**:
+                  Use fs_write to save the main.tex content that was prepared in the previous step.
+                  
+                  **ALL OTHER OPERATIONS ARE FORBIDDEN**:
+                  - DO NOT modify the content
+                  - DO NOT use any other tools (fs_read, fs_mkdir, etc.)
+                  - DO NOT ask for confirmation
+                  - DO NOT provide explanations or suggestions
+                  
+                  **CONTENT TO SAVE**:
+                  The main.tex content has already been prepared in the previous step and is stored in context variable 'main_tex_content'.
+                  
+                  **CRITICAL - CONTENT BOUNDARIES**:
+                  The content to save is the VALUE of the context variable 'main_tex_content'.
+                  This variable contains the COMPLETE LaTeX template with Title already inserted.
+                  
+                  ========== CONTENT TO SAVE (START) ==========
+                  {{main_tex_content}}
+                  ========== CONTENT TO SAVE (END) ==========
+                  
+                  **EXECUTION STEPS** (execute immediately, no questions):
+                  1. Extract the content between "CONTENT TO SAVE (START)" and "CONTENT TO SAVE (END)" markers above.
+                  2. This content is the VALUE of 'main_tex_content' variable (the LaTeX template with Title).
+                  3. Call fs_write tool with:
+                     - path: {{output_dir}}/sections/main.tex
+                     - content: (ONLY the content between the markers, nothing else)
+                     - mode: "text"
+                  4. Return ONLY: "File saved: {{output_dir}}/sections/main.tex"
+                  
+                  **CRITICAL - DO NOT MODIFY CONTENT**:
+                  - DO NOT change anything
+                  - DO NOT modify any part of the LaTeX template
+                  - DO NOT add or remove any characters
+                  - Save the content EXACTLY as shown between the markers
+                  
+                  **DO NOT**:
+                  - Save instruction text, markers, or any explanation
+                  - Use any other tools
+                  - Ask questions or provide explanations
+              save_as: "save_main_tex_result"
+
+          # Step 3: Write all brief sections
+          - step:
+              name: "write_proposal_sections"
+              instruction: |
+                  **CRITICAL - NO FILE OPERATIONS ALLOWED**:
+                  This step is for writing content only. You MUST NOT use fs_write, fs_read, fs_mkdir, or any other file operations.
+                  DO NOT save any files. DO NOT create any directories. Only return the written content.
+                  
+                  {{write_system_prompt}}
+
+                  You are writing a concise research proposal with five brief sections. Each section should be short and focused.
+
+                  Here is the research idea that the proposal is based on:
+                  {{idea_data}}
+
+                  **YOUR TASK**: Write ALL FIVE sections below. Each section must be in proper LaTeX format.
+
+                  **SECTION 1 — Abstract** (3-4 sentences):
+                  {{abstract_tips}}
+                  - One continuous paragraph, no breaks
+                  - Wrap with \begin{abstract} ... \end{abstract}
+
+                  **SECTION 2 — Brief Introduction** (3-4 sentences):
+                  - Describe the research problem and its importance
+                  - Explain why this problem is worth investigating
+                  - State the motivation and significance
+                  - Use \section{Brief Introduction}
+
+                  **SECTION 3 — Brief Related Work** (3-4 sentences):
+                  - Briefly overview existing approaches in the field
+                  - Highlight gaps or limitations in current work
+                  - DO NOT use citations — describe related work in natural language only
+                  - Use \section{Brief Related Work}
+
+                  **SECTION 4 — Brief Method** (3-4 sentences):
+                  - Describe the proposed approach/methodology concisely
+                  - Highlight key innovations and design choices
+                  - DO NOT use mathematical formulas — describe concepts in words
+                  - Use \section{Brief Method}
+
+                  **SECTION 5 — Brief Experiment Plan** (3-4 sentences):
+                  - Outline the experimental design and evaluation plan
+                  - Describe datasets, metrics, and how experiments validate the approach
+                  - Use \section{Brief Experiment Plan}
+
+                  **CRITICAL REQUIREMENTS**:
+                  - Each section should be 3-4 sentences ONLY — keep it concise
+                  - DO NOT use any citations (e.g., \cite{...}, \citep{...}, \citet{...})
+                  - DO NOT include any mathematical formulas (e.g., $...$, \(...\), \[...\], \begin{equation}...\end{equation})
+                  - Write in plain text only, describing the research in natural language
+                  - If you need to mention mathematical concepts, describe them in words
+
+                  **CRITICAL FORMAT REQUIREMENTS**:
+                  - Use actual line breaks (press Enter), NOT literal `\n` characters
+                  - Use single backslash for LaTeX commands: `\begin`, `\end`, `\section`, NOT double backslash
+                  - Separate the five sections with a blank line between them
+
+                  **OUTPUT FORMAT — Return ALL five sections in order, like this:**
+
+                  \begin{abstract}
+                  [3-4 sentences]
+                  \end{abstract}
+
+                  \section{Brief Introduction}
+                  [3-4 sentences]
+
+                  \section{Brief Related Work}
+                  [3-4 sentences]
+
+                  \section{Brief Method}
+                  [3-4 sentences]
+
+                  \section{Brief Experiment Plan}
+                  [3-4 sentences]
+              save_as: "proposal_sections_draft"
+
+          # Step 4: Save all sections to individual .tex files
+          - step:
+              name: "save_all_sections"
+              instruction: |
+                  **CRITICAL - NO DIRECTORY CREATION**:
+                  - The sections/ directory has already been created in Step 1 (setup_environment)
+                  - DO NOT use fs_mkdir — directories already exist
+                  - Only use fs_write to save files
+
+                  You must split the proposal content below into 5 separate .tex files and save each one.
+
+                  ========== PROPOSAL CONTENT (START) ==========
+                  {{proposal_sections_draft}}
+                  ========== PROPOSAL CONTENT (END) ==========
+
+                  **SAVE THESE 5 FILES** (use fs_write with mode="text" for each):
+
+                  1. **{{output_dir}}/sections/abstract.tex**
+                     Content: Everything from `\begin{abstract}` to `\end{abstract}` (inclusive)
+
+                  2. **{{output_dir}}/sections/brief_introduction.tex**
+                     Content: `\section{Brief Introduction}` and its paragraph(s)
+
+                  3. **{{output_dir}}/sections/brief_related_work.tex**
+                     Content: `\section{Brief Related Work}` and its paragraph(s)
+
+                  4. **{{output_dir}}/sections/brief_method.tex**
+                     Content: `\section{Brief Method}` and its paragraph(s)
+
+                  5. **{{output_dir}}/sections/brief_experiment_plan.tex**
+                     Content: `\section{Brief Experiment Plan}` and its paragraph(s)
+
+                  **CRITICAL**:
+                  - Save ALL 5 files — do not skip any
+                  - Each file should contain ONLY its section content
+                  - Use the EXACT paths shown above
+                  - After saving all files, return: "All 5 section files saved successfully."
+              save_as: "save_sections_result"
