@@ -161,4 +161,4 @@ config/              Environment and Docker configuration
 
 ## License
 
-The code included in this project is licensed under the [Apache 2.0 license](LICENSE). If you wish to use the codes and models included in this project for commercial purposes, please sign this [document](https://docs.google.com/forms/d/e/1FAIpQLScDtq1gb8-m3zq6uD2G8_ZqK4gMJ1M8BaFbUyc4PW_t52SoGA/viewform) to obtain authorization.
+The code included in this project is licensed under the [Apache 2.0 license](LICENSE).
