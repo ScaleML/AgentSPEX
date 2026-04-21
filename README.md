@@ -2,7 +2,7 @@
 
 A declarative workflow language for LLM-agent pipelines with explicit control flow, modular structure, and a customizable execution harness.
 
-This is the official implementation accompanying the paper [*AgentSPEX: An Agent SPecification and EXecution Language*](https://arxiv.org/abs/2604.13346v1).
+This is the official implementation accompanying the paper [*AgentSPEX: An Agent SPecification and EXecution Language*](https://arxiv.org/abs/2604.13346v1). Visit the official website at [agentspex.ai](https://agentspex.ai/) to try free demos.
 
 See the [Workflow Language Guide](docs/workflow-language.md) for full syntax, step types, and examples.
 
