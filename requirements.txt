@@ -1,7 +1,7 @@
 fastmcp==3.2.0
 litellm==1.81.5
 openai==2.20.0
-python-dotenv==1.1.1
+python-dotenv==1.2.2
 tiktoken==0.8.0
 datasets==3.6.0
 arxiv-mcp-server==0.3.1
