@@ -81,36 +81,55 @@ parameters:
   cost_efficient: true   # or false
 ```
 
-### Refiner (Iterative Quality Improvement)
+### Refiner (Iterative Quality Improvement) — Disabled by Default
 
-The full pipeline includes an optional **Refiner** stage that runs after the Writer. The Refiner iteratively improves the generated proposal through a loop of:
+> ⚠️ **The Refiner is commented out by default** in `demo/ai_scientists/ai_scientists.yaml` because it requires the **Gemini API** (for figure generation) and can consume a large number of tokens across multiple iterations. Enable it only if you understand the cost implications.
 
-1. **Compile PDF** and submit to a review API for scoring
-2. **Format checks** (11 criteria: title length, abstract formatting, subsection count, reference count, figure presence, contribution clarity, etc.)
+The Refiner is an optional stage that runs after the Writer. It iteratively improves the generated proposal through a loop of:
+
+1. **Compile PDF** and submit to a **review API** (`review_paper` tool) for scoring
+2. **Format checks** — 11 automated criteria (title length, abstract formatting, subsection count, reference count, figure presence, contribution clarity, etc.)
 3. **Generate suggestions** based on review feedback and failing format criteria
 4. **Apply edits** per section using surgical text patching
 5. **Generate a research overview figure** using Gemini 2.5 Flash Image — a colorful infographic-style figure is automatically created and inserted into the paper
-6. **Repeat** until the review score and all format checks pass, or the maximum iteration count is reached
+6. **Repeat** until a stop condition is met (see below)
 
-The Refiner typically runs **3–5 iterations** and adds **15–35 minutes** to the pipeline.
+#### Stop Conditions
 
-**API keys required for the Refiner:**
+The loop terminates as soon as **either** of these conditions is satisfied:
+
+| # | Condition | Where it's defined |
+|---|-----------|--------------------|
+| 1 | **Quality threshold met**: `review_score ≥ min_score` (default `5.6`) **AND** all 11 format checks pass | [`refiner/modules/review_and_exit.yaml`](refiner/modules/review_and_exit.yaml) — `STOP if all_format_pass == true AND score_ok == true` |
+| 2 | **Max iterations reached**: 10 iterations completed | [`refiner/ai_scientists_refiner.yaml`](refiner/ai_scientists_refiner.yaml) — `while.max_iterations: 10` |
+
+You can adjust both thresholds:
+- `min_score`: edit `parameters.min_score` in [`refiner/ai_scientists_refiner.yaml`](refiner/ai_scientists_refiner.yaml) (default `5.6`)
+- `max_iterations`: edit `while.max_iterations` in the same file (default `10`)
+
+> 💡 **Token usage tip**: Each iteration calls GPT-5.2 several times (suggestions for 6 sections + edits + format/content evaluation) plus one Gemini call for figure generation. A single iteration typically costs **$0.5–$1.5**. With `max_iterations: 10`, the worst-case cost is **~$10–$15** if no early stop is triggered. Lower `max_iterations` or raise `min_score` cautiously.
+
+#### API Keys Required
 
 | Key | Purpose |
 |-----|---------|
-| `OPENAI_API_KEY` | GPT-5.2 for suggestion generation, text editing, and format evaluation |
+| `OPENAI_API_KEY` | GPT-5.2 for suggestion generation, text editing, format evaluation, and the `review_paper` reviewer call |
 | `GOOGLE_API_KEY` | Gemini 2.5 Flash Image for research overview figure generation |
 
-**To disable the Refiner**, remove or comment out the refiner `call` block in `demo/ai_scientists/ai_scientists.yaml`:
+#### How to Enable the Refiner
+
+Open `demo/ai_scientists/ai_scientists.yaml` and **uncomment** the Step 5.2 block (remove the leading `# ` from each line):
 
 ```yaml
         # Step 5.2: Refiner — iterative review-driven improvement
-        # - call:
-        #     module: "demo/ai_scientists/refiner/ai_scientists_refiner.yaml"
-        #     parameters:
-        #       sections_dir: "{{output_dir}}/writer/sections"
-        #       output_dir: "{{output_dir}}/refiner"
-        #       human_feedback: "..."
+        - call:
+            module: "demo/ai_scientists/refiner/ai_scientists_refiner.yaml"
+            parameters:
+              sections_dir: "{{output_dir}}/writer/sections"
+              output_dir: "{{output_dir}}/refiner"
+              human_feedback: "Shorten the title to be more concise (under 10 words). Improve LaTeX table formatting: replace \\hline with booktabs commands (\\toprule, \\midrule, \\bottomrule) and ensure column alignment is clean."
+            save_as: "refiner_result"
+            return: "prev_output"
 ```
 
 The Refiner can also be run independently on any existing paper:
