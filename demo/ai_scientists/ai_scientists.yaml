@@ -130,15 +130,15 @@ workflow:
                   save_as: "writer_result"
                   return: "prev_output"
 
-        # Step 5.2: Refiner — iterative review-driven improvement
-        - call:
-            module: "demo/ai_scientists/refiner/ai_scientists_refiner.yaml"
-            parameters:
-              sections_dir: "{{output_dir}}/writer/sections"
-              output_dir: "{{output_dir}}/refiner"
-              human_feedback: "Shorten the title to be more concise (under 10 words). Improve LaTeX table formatting: replace \\hline with booktabs commands (\\toprule, \\midrule, \\bottomrule) and ensure column alignment is clean."
-            save_as: "refiner_result"
-            return: "prev_output"
+        # # Step 5.2: Refiner — iterative review-driven improvement
+        # - call:
+        #     module: "demo/ai_scientists/refiner/ai_scientists_refiner.yaml"
+        #     parameters:
+        #       sections_dir: "{{output_dir}}/writer/sections"
+        #       output_dir: "{{output_dir}}/refiner"
+        #       human_feedback: "Shorten the title to be more concise (under 10 words). Improve LaTeX table formatting: replace \\hline with booktabs commands (\\toprule, \\midrule, \\bottomrule) and ensure column alignment is clean."
+        #     save_as: "refiner_result"
+        #     return: "prev_output"
 
       else:
         # Step 5.3: Skip paper writing if idea generation failed
