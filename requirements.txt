@@ -30,6 +30,7 @@ chardet>=5.0,<6
 certifi==2026.1.4
 pyperclip==1.11.0
 swebench==4.1.0
+cbor2==5.9.0
 sb-cli==0.1.5
 bm25s==0.3.2
 PyStemmer==3.0.0

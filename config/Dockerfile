@@ -36,7 +36,7 @@ RUN micromamba install -y -p /opt/conda -c conda-forge python=${PYTHON_VERSION} 
 
 # Python deps (pip into /opt/conda)
 RUN python -m pip install --upgrade pip \
- && pip install --no-cache-dir fastapi uvicorn httpx fastmcp pydantic playwright websockets beautifulsoup4 PyPDF2
+ && pip install --no-cache-dir fastapi uvicorn httpx pydantic playwright websockets beautifulsoup4 PyPDF2
 
 # Install Playwright system dependencies first
 RUN playwright install-deps chromium

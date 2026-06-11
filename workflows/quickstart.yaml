@@ -1,0 +1,25 @@
+name: "quickstart"
+goal: "Write and run a Python script that prints system info, then summarize the results"
+system_prompt: "You are a helpful AI assistant."
+
+config:
+  model: "gpt-4o"
+  max_tokens_per_step: 1000
+
+workflow:
+  - task:
+      name: "write_script"
+      instruction: >
+        Write a Python script that prints: the current date/time,
+        the OS platform, the Python version, and the current working directory.
+        Use only the standard library (os, sys, platform, datetime).
+        Execute the script using the execute_python_code tool.
+
+  - task:
+      name: "summary"
+      instruction: >
+        The previous step produced the following output:
+        {{prev_output}}
+
+        Write a short system profile summarizing that output. Save it to a file
+        called system_profile.md using the write_file tool.
