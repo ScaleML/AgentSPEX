@@ -7,7 +7,7 @@ Wikipedia_API==0.8.1
 openai==1.99.9
 Pillow==11.3.0
 openpyxl==3.1.5
-pypdf==6.0.0
+pypdf==6.12.0
 python-docx==1.2.0
 python-pptx==1.0.2
 pexpect==4.9.0
